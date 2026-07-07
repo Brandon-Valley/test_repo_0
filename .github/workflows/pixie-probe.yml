@@ -1,19 +1,21 @@
 name: Pixie Hollow extraction probe
 
 on:
-  push:
-    branches:
-      - master
+  issues:
+    types:
+      - opened
   workflow_dispatch:
 
 permissions:
   contents: read
+  issues: write
 
 env:
   JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx6g
 
 jobs:
   probe:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.issue.title, '[PIXIE PROBE]')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -91,3 +93,15 @@ jobs:
           if-no-files-found: error
           retention-days: 3
           compression-level: 6
+
+      - name: Report run ID
+        if: always() && github.event_name == 'issues'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `PIXIE_PROBE_RUN_ID=${context.runId}\nPIXIE_PROBE_STATUS=${{ job.status }}`
+            });
