@@ -1,0 +1,449 @@
+name: Build complete Pixie Hollow image library
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1500m
+
+jobs:
+  extract:
+    if: contains(github.event.comment.body, 'run pixie full library')
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout source archive
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+
+      - name: Set up Java and Python
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pillow
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq rsync
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          test -n "$url"
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+
+      - name: Build deduplicated shard manifest
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mkdir -p part/00_metadata
+          python - <<'PY'
+          import csv, hashlib, json, os
+          from collections import defaultdict
+          from pathlib import Path
+
+          root = Path('source')
+          shard = int(os.environ['SHARD'])
+          groups = defaultdict(list)
+          for p in root.rglob('*'):
+              if p.is_file() and p.suffix.lower() == '.swf':
+                  h = hashlib.sha256()
+                  with p.open('rb') as f:
+                      for block in iter(lambda: f.read(1024 * 1024), b''):
+                          h.update(block)
+                  groups[h.hexdigest()].append(p.relative_to(root).as_posix())
+
+          def score(path):
+              low = path.lower()
+              penalty = 0
+              if low.startswith('pixiehollow/game3/') or low.startswith('pixiehollow/game2/'):
+                  penalty += 1000
+              if low.startswith('publish/'):
+                  penalty += 800
+              if low.startswith('swf/') or low.startswith('meadows/'):
+                  penalty -= 100
+              return penalty, len(path), path
+
+          rows = []
+          all_rows = []
+          for index, digest in enumerate(sorted(groups)):
+              paths = sorted(groups[digest], key=score)
+              primary = paths[0]
+              row = [digest, primary, str((root / primary).stat().st_size), json.dumps(paths)]
+              all_rows.append(row)
+              if index % 4 == shard:
+                  rows.append(row)
+
+          for name, data in [('all_unique_swfs.tsv', all_rows), (f'shard_{shard}.tsv', rows)]:
+              with open('part/00_metadata/' + name, 'w', newline='', encoding='utf-8') as f:
+                  w = csv.writer(f, delimiter='\t')
+                  w.writerow(['sha256', 'primary_source_path', 'bytes', 'all_duplicate_paths_json'])
+                  w.writerows(data)
+          print(f'shard={shard} unique_total={len(all_rows)} shard_count={len(rows)}')
+          PY
+
+      - name: Preserve loose images and source metadata
+        if: matrix.shard == 0
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p part/01_loose_images part/00_metadata/source_xml
+          cd source
+          find . -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' -o -iname '*.webp' -o -iname '*.bmp' -o -iname '*.svg' \) -print0 | rsync -a --from0 --files-from=- ./ ../part/01_loose_images/
+          find . -type f \( -iname '*.xml' -o -iname '*.json' \) -print0 | rsync -a --from0 --files-from=- ./ ../part/00_metadata/source_xml/
+
+      - name: Extract SWF assets
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          mkdir -p part/02_swf_assets part/00_metadata/logs
+          tail -n +2 "part/00_metadata/shard_${SHARD}.tsv" | while IFS=$'\t' read -r digest rel bytes duplicates; do
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            out="part/02_swf_assets/${safe}__${digest:0:10}"
+            input="source/$rel"
+            mkdir -p "$out/fundamental" "$out/composites" "$out/context"
+            printf '%s\n' "$rel" > "$out/context/primary_source_path.txt"
+            printf '%s\n' "$digest" > "$out/context/sha256.txt"
+            printf '%s\n' "$duplicates" > "$out/context/all_duplicate_paths.json"
+
+            timeout 240s java -jar "$FFDEC_JAR" -onerror ignore \
+              -format "image:png,shape:png,morphshape:png_start_end,button:png" \
+              -export "image,shape,morphshape,button,symbolClass" \
+              "$out/fundamental" "$input" \
+              >"part/00_metadata/logs/${digest:0:12}_fundamental.log" 2>&1 || true
+
+            timeout 120s java -jar "$FFDEC_JAR" -onerror ignore -ignorebackground \
+              -select "0:1" -format "frame:png" -export frame \
+              "$out/composites/root" "$input" \
+              >"part/00_metadata/logs/${digest:0:12}_root.log" 2>&1 || true
+            root_png=$(find "$out/composites/root" -type f -iname '*.png' 2>/dev/null | head -n 1 || true)
+            if [ -n "$root_png" ]; then cp "$root_png" "$out/composites/root_frame_001.png"; fi
+            rm -rf "$out/composites/root"
+
+            priority=0
+            case "$rel" in
+              meadows/*|swf/panel_content/*|swf/animalFriends/*|swf/items/*|swf/shops/*|swf/backgrounds/*|swf/badges/*|swf/hotspots/*|swf/giveaways/*|swf/derbyCarts/*|swf/avatar*|*Avatar*|*Outfit*|*Hair*|*Wings*) priority=1 ;;
+            esac
+            if [ "$priority" -eq 1 ] && [ "$bytes" -le 15000000 ]; then
+              tmp="part/.sprite_tmp_${digest:0:12}"
+              timeout 300s java -jar "$FFDEC_JAR" -onerror ignore \
+                -format "sprite:png" -export sprite "$tmp" "$input" \
+                >"part/00_metadata/logs/${digest:0:12}_sprites.log" 2>&1 || true
+              python - "$tmp" "$out/composites/sprite_previews" <<'PY'
+          import shutil, sys
+          from pathlib import Path
+          src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+          count = 0
+          if src.exists():
+              for folder in sorted(p for p in src.rglob('*') if p.is_dir()):
+                  images = sorted(folder.glob('*.png'), key=lambda p: (int(p.stem) if p.stem.isdigit() else 10**9, p.name))
+                  if not images:
+                      continue
+                  target = dst / folder.relative_to(src)
+                  target.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(images[0], target / 'frame_001.png')
+                  count += 1
+          print(count)
+          PY
+              rm -rf "$tmp"
+            fi
+
+            find "$out" -type d -empty -delete || true
+          done
+
+      - name: Remove unhelpful logs and upload shard
+        shell: bash
+        run: |
+          find part/00_metadata/logs -type f -size 0 -delete || true
+          find part/00_metadata/logs -type f -exec grep -L -E 'FAIL|SEVERE|Exception|Error|Timed out' {} \; -delete || true
+          du -sh part
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-library-part-${{ matrix.shard }}
+          path: part
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 6
+
+  assemble:
+    if: contains(github.event.comment.body, 'run pixie full library')
+    needs: extract
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Download all extraction shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pixie-library-part-*
+          path: downloaded
+
+      - name: Checkout source for composition metadata
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Merge, compose, index, and document
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pillow
+          mkdir -p library
+          for p in downloaded/pixie-library-part-*; do cp -a "$p/part/." library/; done
+
+          python - <<'PY'
+          import csv, html, json, math, os, re, shutil
+          import xml.etree.ElementTree as ET
+          from collections import Counter, defaultdict
+          from pathlib import Path
+          from PIL import Image, ImageDraw, ImageFont
+
+          lib = Path('library')
+          source = Path('source')
+          assets = lib / '02_swf_assets'
+          composites = lib / '03_logical_composites'
+          composites.mkdir(parents=True, exist_ok=True)
+
+          manifest_file = lib / '00_metadata/all_unique_swfs.tsv'
+          rows = list(csv.DictReader(manifest_file.open(encoding='utf-8'), delimiter='\t'))
+          path_to_asset = {}
+          for row in rows:
+              rel = row['primary_source_path']
+              digest = row['sha256']
+              safe = re.sub(r'[^A-Za-z0-9._/-]+', '_', rel[:-4])
+              asset_dir = assets / f'{safe}__{digest[:10]}'
+              for p in json.loads(row['all_duplicate_paths_json']):
+                  path_to_asset[p] = asset_dir
+
+          meadow_records = []
+          meadow_root = composites / 'meadows'
+          for config in source.rglob('config.xml'):
+              rel_config = config.relative_to(source).as_posix()
+              if not rel_config.startswith('meadows/'):
+                  continue
+              try:
+                  root = ET.parse(config).getroot()
+              except Exception:
+                  continue
+              layers = root.findall('./clientLayout/layers/layer')
+              if not layers:
+                  continue
+              name = (root.findtext('name') or config.parent.name).strip()
+              zone_id = (root.findtext('zoneID') or config.parent.name).strip()
+              parsed = []
+              tags = set()
+              canvas_w = canvas_h = 0
+              for layer in layers:
+                  canvas_w = max(canvas_w, int(float(layer.attrib.get('width', 0) or 0)))
+                  canvas_h = max(canvas_h, int(float(layer.attrib.get('height', 0) or 0)))
+                  options = []
+                  for node in layer.findall('image'):
+                      filename = (node.text or '').strip()
+                      if not filename:
+                          continue
+                      node_tags = [t.strip() for t in (node.attrib.get('tag') or '').split(',') if t.strip()]
+                      tags.update(node_tags)
+                      options.append((filename, node_tags, int(float(node.attrib.get('x', 0) or 0)), int(float(node.attrib.get('y', 0) or 0))))
+                  parsed.append(options)
+              if not parsed or not canvas_w or not canvas_h:
+                  continue
+              zone_out = meadow_root / re.sub(r'[^A-Za-z0-9._-]+', '_', f'{zone_id}_{name}').strip('_')
+              zone_out.mkdir(parents=True, exist_ok=True)
+              variants = [('default', None)] + [(re.sub(r'[^A-Za-z0-9._-]+', '_', t), t) for t in sorted(tags)]
+              for variant_name, event_tag in variants:
+                  chosen = []
+                  missing = []
+                  for options in parsed:
+                      choice = None
+                      if event_tag:
+                          choice = next((o for o in options if event_tag in o[1]), None)
+                      if choice is None:
+                          choice = next((o for o in options if not o[1]), None)
+                      if choice is None:
+                          continue
+                      filename, _, x, y = choice
+                      rel_swf = (config.parent / filename).relative_to(source).as_posix()
+                      asset_dir = path_to_asset.get(rel_swf)
+                      preview = asset_dir / 'composites/root_frame_001.png' if asset_dir else None
+                      if not preview or not preview.exists():
+                          missing.append(rel_swf)
+                          continue
+                      chosen.append((preview, x, y, rel_swf))
+                  if not chosen:
+                      continue
+                  canvas = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+                  for preview, x, y, _ in chosen:
+                      try:
+                          with Image.open(preview) as im:
+                              canvas.alpha_composite(im.convert('RGBA'), (x, y))
+                      except Exception:
+                          pass
+                  out = zone_out / f'{variant_name}.png'
+                  canvas.save(out, optimize=True)
+                  meadow_records.append([rel_config, name, zone_id, event_tag or 'default', out.relative_to(lib).as_posix(), json.dumps(missing)])
+
+          with (lib / '00_metadata/meadow_compositions.csv').open('w', newline='', encoding='utf-8') as f:
+              w = csv.writer(f)
+              w.writerow(['config', 'meadow_name', 'zone_id', 'variant', 'output_image', 'missing_layers_json'])
+              w.writerows(meadow_records)
+
+          def make_sheet(files, output, title, limit=120):
+              files = [p for p in files if p.exists()][:limit]
+              if not files:
+                  return False
+              cell_w, cell_h, label_h, cols = 180, 150, 28, 6
+              rows_n = math.ceil(len(files) / cols)
+              sheet = Image.new('RGB', (cols * cell_w, 50 + rows_n * (cell_h + label_h)), 'white')
+              draw = ImageDraw.Draw(sheet)
+              draw.text((12, 14), title[:150], fill='black')
+              for i, p in enumerate(files):
+                  x = (i % cols) * cell_w
+                  y = 50 + (i // cols) * (cell_h + label_h)
+                  try:
+                      with Image.open(p) as im:
+                          im = im.convert('RGBA')
+                          im.thumbnail((cell_w - 12, cell_h - 12))
+                          bg = Image.new('RGBA', (cell_w, cell_h), (240, 240, 240, 255))
+                          bg.alpha_composite(im, ((cell_w - im.width)//2, (cell_h - im.height)//2))
+                          sheet.paste(bg.convert('RGB'), (x, y))
+                  except Exception:
+                      continue
+                  draw.text((x + 4, y + cell_h + 3), p.parent.name[:25], fill='black')
+              output.parent.mkdir(parents=True, exist_ok=True)
+              sheet.save(output, quality=90, optimize=True)
+              return True
+
+          sheets = composites / 'contact_sheets'
+          category_groups = defaultdict(list)
+          for preview in assets.rglob('root_frame_001.png'):
+              rel = preview.relative_to(assets).as_posix()
+              parts = rel.split('/')
+              category = '/'.join(parts[:2]) if len(parts) > 2 else parts[0]
+              category_groups[category].append(preview)
+          for category, files in sorted(category_groups.items()):
+              make_sheet(sorted(files), sheets / (re.sub(r'[^A-Za-z0-9._-]+', '_', category) + '.jpg'), category)
+
+          for asset_dir in assets.rglob('*'):
+              sprite_root = asset_dir / 'composites/sprite_previews'
+              if sprite_root.exists():
+                  files = sorted(sprite_root.rglob('frame_001.png'))
+                  if len(files) >= 3:
+                      make_sheet(files, asset_dir / 'composites/sprite_contact_sheet.jpg', asset_dir.name)
+
+          counts = Counter()
+          total_bytes = 0
+          image_rows = []
+          for p in lib.rglob('*'):
+              if p.is_file():
+                  total_bytes += p.stat().st_size
+                  ext = p.suffix.lower()
+                  counts[ext or '[none]'] += 1
+                  if ext in {'.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg','.apng'}:
+                      image_rows.append([p.relative_to(lib).as_posix(), ext, p.stat().st_size])
+          with (lib / '00_metadata/image_index.csv').open('w', newline='', encoding='utf-8') as f:
+              w = csv.writer(f); w.writerow(['path','extension','bytes']); w.writerows(image_rows)
+
+          readme = f'''# Pixie Hollow Rewritten Image Library
+
+Generated from the public `PixieHollowRE/web` repository.
+
+## Contents
+
+- `01_loose_images/`: every ordinary PNG, JPG, GIF, WebP, BMP, and SVG already present in the source repository, preserving its original path.
+- `02_swf_assets/`: assets extracted from every unique SWF. Identical SWFs that appeared in multiple archived folders were extracted once. Each folder includes its source path, SHA-256 hash, duplicate-path list, fundamental bitmaps/vector renders, a root-frame composite, and representative first-frame sprite previews where practical.
+- `03_logical_composites/meadows/`: complete meadow images assembled from the layer rules in each meadow `config.xml`, including the default state and every discoverable event/tag variant such as Great Games, seasonal celebrations, rain, masquerades, and preparation states.
+- `03_logical_composites/contact_sheets/`: browsable sheets grouping related SWF previews, useful for outfits, avatar components, shops, panels, minigames, homes, gardens, furniture, pets, and UI collections.
+- `00_metadata/`: complete SWF deduplication manifest, image index, source XML/JSON context, extraction error logs, and meadow composition records.
+
+## Extraction model
+
+Flash SWFs contain several different visual levels. `fundamental/` contains the lowest practical exported pieces: embedded bitmaps, rendered vector shapes, morph-shape endpoints, and button states. `composites/root_frame_001.png` is the first fully rendered root frame of that SWF. `composites/sprite_previews/` contains the first rendered frame of individual Flash sprites for high-value visual categories. This intentionally includes some duplication because both atomic pieces and meaningful combinations are useful.
+
+## Important limitations
+
+A few game scenes are assembled dynamically by ActionScript, remote imports, avatar rigging, runtime dye colors, player data, or server state. Static extraction cannot always produce a perfect dressed fairy, a specific live wardrobe screen, or every animation pose. The library preserves the underlying pieces and creates the combinations that can be reconstructed reliably from repository metadata. Missing external imports and timed-out or malformed SWFs are recorded under `00_metadata/logs/` rather than silently omitted.
+
+## Summary
+
+- Unique SWFs extracted: {len(rows):,}
+- Meadow composites generated: {len(meadow_records):,}
+- Indexed image files: {len(image_rows):,}
+- Uncompressed library size: {total_bytes:,} bytes
+- Most common file types: {', '.join(f'{k}={v:,}' for k,v in counts.most_common(12))}
+
+## Naming
+
+SWF output folders preserve the original repository path and append the first ten characters of the SWF SHA-256 hash. This prevents collisions while keeping names understandable. Internal JPEXS names retain Flash character IDs and exported symbol names because those IDs are the most reliable way to trace an image back to its source SWF.
+'''
+          (lib / 'README.md').write_text(readme, encoding='utf-8')
+
+          thumbs = []
+          for p in sorted((composites / 'contact_sheets').glob('*.jpg'))[:200]:
+              thumbs.append(f'<figure><a href="{html.escape(p.relative_to(lib).as_posix())}"><img src="{html.escape(p.relative_to(lib).as_posix())}"></a><figcaption>{html.escape(p.stem)}</figcaption></figure>')
+          index = '''<!doctype html><meta charset="utf-8"><title>Pixie Hollow Image Library</title><style>body{font-family:system-ui;margin:24px;background:#f6f2ff;color:#28213a}main{max-width:1400px;margin:auto}section{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}figure{margin:0;background:white;padding:10px;border-radius:12px;box-shadow:0 2px 12px #0002}img{width:100%;height:190px;object-fit:contain}figcaption{padding:8px;overflow-wrap:anywhere}</style><main><h1>Pixie Hollow Image Library</h1><p>Open README.md for structure and limitations. Contact sheets are linked below.</p><section>''' + ''.join(thumbs) + '</section></main>'
+          (lib / 'index.html').write_text(index, encoding='utf-8')
+          PY
+
+          find library -type d -empty -delete || true
+          du -sh library
+          find library -type f | wc -l
+
+      - name: Create final ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip -q -1 -r Pixie_Hollow_Complete_Image_Library.zip library
+          sha256sum Pixie_Hollow_Complete_Image_Library.zip > Pixie_Hollow_Complete_Image_Library.zip.sha256
+          ls -lh Pixie_Hollow_Complete_Image_Library.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-hollow-complete-image-library
+          path: |
+            Pixie_Hollow_Complete_Image_Library.zip
+            Pixie_Hollow_Complete_Image_Library.zip.sha256
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+      - name: Report final run ID
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_FULL_LIBRARY_RUN_ID=${context.runId}\nPIXIE_FULL_LIBRARY_STATUS=${{ job.status }}`});
