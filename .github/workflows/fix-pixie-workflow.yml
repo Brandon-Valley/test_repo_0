@@ -1,0 +1,53 @@
+name: Fix Pixie workflow indentation
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  fix:
+    if: contains(github.event.comment.body, 'fix pixie workflow indentation')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - name: Repair YAML block indentation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/pixie-full-library.yml')
+          lines = path.read_text(encoding='utf-8').splitlines()
+          output = []
+          inside = False
+          for line in lines:
+              if "readme = f'''" in line:
+                  inside = True
+                  output.append(line)
+                  continue
+              if inside:
+                  if len(line) - len(line.lstrip(' ')) < 10:
+                      line = '          ' + line
+                  output.append(line)
+                  if line.strip() == "'''":
+                      inside = False
+                  continue
+              output.append(line)
+          path.write_text('\n'.join(output) + '\n', encoding='utf-8')
+          PY
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .github/workflows/pixie-full-library.yml
+          git commit -m "Fix Pixie workflow YAML indentation"
+          git push origin master
+      - name: Report repair
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_WORKFLOW_FIX_STATUS=${{ job.status }} RUN_ID=${context.runId}`});
