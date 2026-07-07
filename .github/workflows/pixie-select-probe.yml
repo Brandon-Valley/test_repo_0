@@ -1,0 +1,63 @@
+name: Pixie select probe
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx5g
+
+jobs:
+  probe:
+    if: contains(github.event.comment.body, 'run pixie select probe')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Download FFDec
+        shell: bash
+        run: |
+          mkdir -p tools/app
+          json=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$json" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/app
+          echo "FFDEC_JAR=$(find tools/app -type f -name ffdec.jar | head -n 1)" >> "$GITHUB_ENV"
+      - name: Compare sprite selectors
+        shell: bash
+        run: |
+          set +e
+          mkdir -p result/logs
+          input=source/swf/panel_content/animalRhythm.swf
+          java -jar "$FFDEC_JAR" -onerror ignore -select 1 -format sprite:png -export sprite result/select_1 "$input" > result/logs/select_1.txt 2>&1
+          echo $? > result/logs/select_1_exit.txt
+          java -jar "$FFDEC_JAR" -onerror ignore -sublength 1 -format sprite:png -export sprite result/sublength_1 "$input" > result/logs/sublength_1.txt 2>&1
+          echo $? > result/logs/sublength_1_exit.txt
+          find result -type f -printf '%p\t%s\n' | sort > result/files.txt
+          du -ah result | sort -h > result/sizes.txt
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-select-probe
+          path: result
+          retention-days: 3
+          compression-level: 6
+      - name: Report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_SELECT_RUN_ID=${context.runId}\nPIXIE_SELECT_STATUS=${{ job.status }}`});
