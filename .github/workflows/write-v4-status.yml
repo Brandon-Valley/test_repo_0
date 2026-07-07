@@ -1,0 +1,34 @@
+name: Write Pixie v4 status file
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  write:
+    if: contains(github.event.comment.body, 'write v4 status file')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const response = await github.rest.actions.listWorkflowRuns({owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'pixie-extract-v4.yml', per_page: 5});
+            const data = response.data.workflow_runs.map(run => ({id: run.id, status: run.status, conclusion: run.conclusion, created_at: run.created_at, updated_at: run.updated_at}));
+            const fs = require('fs');
+            fs.mkdirSync('status', {recursive: true});
+            fs.writeFileSync('status/pixie-v4.json', JSON.stringify(data, null, 2));
+      - name: Commit status file
+        shell: bash
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add status/pixie-v4.json
+          git commit -m "Update Pixie v4 build status" || true
+          git push origin master
