@@ -1,0 +1,161 @@
+name: Extract Pixie Hollow image assets v4
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1500m
+
+jobs:
+  announce:
+    if: contains(github.event.comment.body, 'launch pixie extraction v4')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_V4_RUN_ID=${context.runId} STATUS=started`});
+
+  extract:
+    if: contains(github.event.comment.body, 'launch pixie extraction v4')
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq rsync
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          mkdir -p tools
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Deduplicate and select shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          mkdir -p part/00_metadata
+          python - <<'PY'
+          import csv, hashlib, json, os
+          from collections import defaultdict
+          from pathlib import Path
+          root = Path('source')
+          groups = defaultdict(list)
+          for path in root.rglob('*.swf'):
+              digest = hashlib.sha256()
+              with path.open('rb') as handle:
+                  for block in iter(lambda: handle.read(1024 * 1024), b''):
+                      digest.update(block)
+              groups[digest.hexdigest()].append(path.relative_to(root).as_posix())
+          def score(path):
+              low = path.lower()
+              penalty = 1000 if low.startswith(('pixiehollow/game2/','pixiehollow/game3/')) else 0
+              penalty += 800 if low.startswith('publish/') else 0
+              penalty -= 100 if low.startswith(('swf/','meadows/')) else 0
+              return penalty, len(path), path
+          rows = []
+          for index, digest in enumerate(sorted(groups)):
+              paths = sorted(groups[digest], key=score)
+              rows.append([digest, paths[0], (root / paths[0]).stat().st_size, json.dumps(paths), index])
+          header = ['sha256','primary_source_path','bytes','all_duplicate_paths_json','unique_index']
+          with open('part/00_metadata/all_unique_swfs.tsv','w',newline='',encoding='utf-8') as handle:
+              writer=csv.writer(handle,delimiter='\t'); writer.writerow(header); writer.writerows(rows)
+          shard = int(os.environ['SHARD'])
+          with open('part/00_metadata/shard.tsv','w',newline='',encoding='utf-8') as handle:
+              writer=csv.writer(handle,delimiter='\t'); writer.writerow(header); writer.writerows(row for row in rows if row[4] % 4 == shard)
+          print('unique',len(rows),'shard',shard)
+          PY
+      - name: Copy loose images and source metadata
+        if: matrix.shard == 0
+        shell: bash
+        run: |
+          mkdir -p part/01_loose_images part/00_metadata/source_xml
+          cd source
+          find . -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' -o -iname '*.webp' -o -iname '*.bmp' -o -iname '*.svg' \) -print0 | rsync -a --from0 --files-from=- ./ ../part/01_loose_images/
+          find . -type f \( -iname '*.xml' -o -iname '*.json' \) -print0 | rsync -a --from0 --files-from=- ./ ../part/00_metadata/source_xml/
+      - name: Extract SWF images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p part/02_swf_assets part/00_metadata/logs
+          tail -n +2 part/00_metadata/shard.tsv | while IFS=$'\t' read -r digest rel bytes duplicates unique_index; do
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            out="part/02_swf_assets/${safe}__${digest:0:10}"
+            input="source/$rel"
+            mkdir -p "$out/fundamental" "$out/composites" "$out/context"
+            printf '%s\n' "$rel" > "$out/context/primary_source_path.txt"
+            printf '%s\n' "$digest" > "$out/context/sha256.txt"
+            printf '%s\n' "$duplicates" > "$out/context/all_duplicate_paths.json"
+            timeout 240s java -jar "$FFDEC_JAR" -onerror ignore -format "image:png,shape:png,morphshape:png_start_end,button:png" -export "image,shape,morphshape,button,symbolClass" "$out/fundamental" "$input" > "part/00_metadata/logs/${digest:0:12}_fundamental.log" 2>&1 || true
+            timeout 120s java -jar "$FFDEC_JAR" -onerror ignore -ignorebackground -select "0:1" -format "frame:png" -export frame "$out/root_temp" "$input" > "part/00_metadata/logs/${digest:0:12}_root.log" 2>&1 || true
+            preview=$(find "$out/root_temp" -type f -iname '*.png' 2>/dev/null | head -n 1 || true)
+            if [ -n "$preview" ]; then cp "$preview" "$out/composites/root_frame_001.png"; fi
+            rm -rf "$out/root_temp"
+            priority=0
+            case "$rel" in
+              meadows/*|swf/panel_content/*|swf/animalFriends/*|swf/items/*|swf/shops/*|swf/backgrounds/*|swf/badges/*|swf/hotspots/*|swf/giveaways/*|swf/derbyCarts/*|swf/avatar*|*Avatar*|*Outfit*|*Hair*|*Wings*) priority=1 ;;
+            esac
+            if [ "$priority" -eq 1 ] && [ "$bytes" -le 15000000 ]; then
+              temp="part/.sprites_${digest:0:12}"
+              timeout 300s java -jar "$FFDEC_JAR" -onerror ignore -format "sprite:png" -export sprite "$temp" "$input" > "part/00_metadata/logs/${digest:0:12}_sprites.log" 2>&1 || true
+              python - "$temp" "$out/composites/sprite_previews" <<'PY'
+          import shutil, sys
+          from pathlib import Path
+          source, target = Path(sys.argv[1]), Path(sys.argv[2])
+          if source.exists():
+              for folder in (path for path in source.rglob('*') if path.is_dir()):
+                  frames = list(folder.glob('*.png'))
+                  frames.sort(key=lambda path: (int(path.stem) if path.stem.isdigit() else 10**9, path.name))
+                  if frames:
+                      destination = target / folder.relative_to(source)
+                      destination.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(frames[0], destination / 'frame_001.png')
+          PY
+              rm -rf "$temp"
+            fi
+            find "$out" -type d -empty -delete || true
+          done
+          find part/00_metadata/logs -type f -size 0 -delete || true
+          find part/00_metadata/logs -type f -exec grep -L -E 'FAIL|SEVERE|Exception|Error|Timed out' {} \; -delete || true
+          du -sh part
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-v4-part-${{ matrix.shard }}
+          path: part
+          retention-days: 3
+          compression-level: 6
+      - name: Report shard status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_V4_RUN_ID=${context.runId} SHARD=${{ matrix.shard }} STATUS=${{ job.status }}`});
