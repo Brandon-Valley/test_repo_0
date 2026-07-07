@@ -1,0 +1,92 @@
+name: Pixie Hollow extraction probe
+
+on:
+  push:
+    branches:
+      - pixie-asset-build
+
+permissions:
+  contents: read
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx6g
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout builder branch
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout Pixie Hollow archive
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download latest JPEXS Free Flash Decompiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tools/ffdec
+          release_json=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          printf '%s' "$release_json" > tools/ffdec/latest-release.json
+          asset_url=$(printf '%s' "$release_json" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          if [ -z "$asset_url" ] || [ "$asset_url" = "null" ]; then
+            echo "Could not locate FFDec ZIP asset" >&2
+            exit 1
+          fi
+          curl -fL "$asset_url" -o tools/ffdec/ffdec.zip
+          unzip -q tools/ffdec/ffdec.zip -d tools/ffdec/app
+          find tools/ffdec/app -maxdepth 3 -type f | sort > tools/ffdec/file-list.txt
+          jar_path=$(find tools/ffdec/app -type f -name 'ffdec.jar' | head -n 1)
+          if [ -z "$jar_path" ]; then
+            echo "ffdec.jar was not found" >&2
+            exit 1
+          fi
+          echo "FFDEC_JAR=$jar_path" >> "$GITHUB_ENV"
+
+      - name: Probe export commands
+        shell: bash
+        run: |
+          set +e
+          mkdir -p probe/help probe/combined probe/all
+          java -jar "$FFDEC_JAR" -help export > probe/help/export-help.txt 2>&1
+          java -jar "$FFDEC_JAR" -help format > probe/help/format-help.txt 2>&1
+          java -jar "$FFDEC_JAR" -help > probe/help/all-help.txt 2>&1
+
+          INPUT="source/swf/panel_content/animalRhythm.swf"
+          java -jar "$FFDEC_JAR" \
+            -format "image:png,shape:png,morphshape:png,sprite:png,button:png,frame:png" \
+            -export "image,shape,morphshape,sprite,button,frame" \
+            probe/combined "$INPUT" \
+            > probe/help/combined-command.txt 2>&1
+          echo $? > probe/help/combined-exit-code.txt
+
+          java -jar "$FFDEC_JAR" -export all probe/all "$INPUT" \
+            > probe/help/all-command.txt 2>&1
+          echo $? > probe/help/all-exit-code.txt
+
+          find probe -type f -printf '%p\t%s bytes\n' | sort > probe/help/output-files.txt
+          du -ah probe | sort -h > probe/help/disk-usage.txt
+          exit 0
+
+      - name: Upload probe results
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixie-extraction-probe
+          path: probe
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 6
