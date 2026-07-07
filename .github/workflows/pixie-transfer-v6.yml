@@ -1,0 +1,229 @@
+name: Transfer Pixie extraction in download-sized parts
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+
+jobs:
+  transfer:
+    if: contains(github.event.comment.body, 'launch pixie transfer v6')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          path: builder
+      - name: Download all four completed extraction artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pixie-v4-part-*
+          path: downloaded
+          run-id: 28901940766
+          github-token: ${{ github.token }}
+      - name: Stream artifacts into numbered 450 MB transfer pieces
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p chunks
+          tar -cf - downloaded | split -b 450M -d -a 2 - chunks/pixie_extraction.tar.part-
+          sha256sum chunks/* > chunks/SHA256SUMS.txt
+          ls -lh chunks
+          du -sh downloaded chunks
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-00
+          path: chunks/pixie_extraction.tar.part-00
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-01
+          path: chunks/pixie_extraction.tar.part-01
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-02
+          path: chunks/pixie_extraction.tar.part-02
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-03
+          path: chunks/pixie_extraction.tar.part-03
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-04
+          path: chunks/pixie_extraction.tar.part-04
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-05
+          path: chunks/pixie_extraction.tar.part-05
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-06
+          path: chunks/pixie_extraction.tar.part-06
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-07
+          path: chunks/pixie_extraction.tar.part-07
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-08
+          path: chunks/pixie_extraction.tar.part-08
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-09
+          path: chunks/pixie_extraction.tar.part-09
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-10
+          path: chunks/pixie_extraction.tar.part-10
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-11
+          path: chunks/pixie_extraction.tar.part-11
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-12
+          path: chunks/pixie_extraction.tar.part-12
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-13
+          path: chunks/pixie_extraction.tar.part-13
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-14
+          path: chunks/pixie_extraction.tar.part-14
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-15
+          path: chunks/pixie_extraction.tar.part-15
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-16
+          path: chunks/pixie_extraction.tar.part-16
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-17
+          path: chunks/pixie_extraction.tar.part-17
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-18
+          path: chunks/pixie_extraction.tar.part-18
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-19
+          path: chunks/pixie_extraction.tar.part-19
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-20
+          path: chunks/pixie_extraction.tar.part-20
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-21
+          path: chunks/pixie_extraction.tar.part-21
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-22
+          path: chunks/pixie_extraction.tar.part-22
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-23
+          path: chunks/pixie_extraction.tar.part-23
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-transfer-checksums
+          path: chunks/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 3
+      - name: Save completed transfer run ID
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p builder/status
+          printf 'run_id=%s\nstatus=completed\n' "$GITHUB_RUN_ID" > builder/status/pixie-transfer-v6.txt
+          cd builder
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add status/pixie-transfer-v6.txt
+          git commit -m "Record completed Pixie transfer run" || true
+          git push origin master
+      - name: Report completion
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_TRANSFER_V6_RUN_ID=${context.runId} STATUS=${{ job.status }}`});
