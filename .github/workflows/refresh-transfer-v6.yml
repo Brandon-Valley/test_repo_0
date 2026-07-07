@@ -1,0 +1,32 @@
+name: Refresh Pixie transfer status
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  refresh:
+    if: contains(github.event.comment.body, 'refresh transfer snapshot')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const result = await github.rest.actions.listWorkflowRuns({owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'pixie-transfer-v6.yml', per_page: 5});
+            const fs = require('fs');
+            fs.mkdirSync('status', {recursive: true});
+            fs.writeFileSync('status/pixie-transfer-current.json', JSON.stringify(result.data.workflow_runs.map(run => ({id: run.id, status: run.status, conclusion: run.conclusion, created_at: run.created_at, updated_at: run.updated_at})), null, 2));
+      - shell: bash
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add status/pixie-transfer-current.json
+          git commit -m "Refresh Pixie transfer status" || true
+          git push origin master
