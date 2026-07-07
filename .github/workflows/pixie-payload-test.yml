@@ -1,0 +1,16 @@
+name: Pixie payload test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write script
+        shell: bash
+        run: |
+          cat > /tmp/test.py <<'PY'
+          print('hello')
+          PY
+          python /tmp/test.py
