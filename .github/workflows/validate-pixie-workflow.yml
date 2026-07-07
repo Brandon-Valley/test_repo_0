@@ -1,0 +1,41 @@
+name: Validate Pixie workflow
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  validate:
+    if: contains(github.event.comment.body, 'validate pixie workflow')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actionlint
+        shell: bash
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      - name: Validate and report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const exec = require('@actions/exec');
+            let output = '';
+            let error = '';
+            const code = await exec.exec('./actionlint', ['.github/workflows/pixie-full-library.yml'], {
+              ignoreReturnCode: true,
+              listeners: {
+                stdout: data => output += data.toString(),
+                stderr: data => error += data.toString()
+              }
+            });
+            const text = (output + error).slice(0, 60000) || 'No validation errors.';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `PIXIE_WORKFLOW_VALIDATION exit=${code}\n\n\`\`\`\n${text}\n\`\`\``
+            });
