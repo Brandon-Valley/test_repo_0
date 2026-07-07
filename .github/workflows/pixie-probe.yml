@@ -16,7 +16,7 @@ env:
 
 jobs:
   probe:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.issue.title, '[PIXIE PROBE]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.issue.title, 'Pixie Hollow image library')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
