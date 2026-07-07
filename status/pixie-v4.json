@@ -1,0 +1,23 @@
+[
+  {
+    "id": 28902295860,
+    "status": "completed",
+    "conclusion": "skipped",
+    "created_at": "2026-07-07T22:12:46Z",
+    "updated_at": "2026-07-07T22:12:47Z"
+  },
+  {
+    "id": 28902131530,
+    "status": "completed",
+    "conclusion": "skipped",
+    "created_at": "2026-07-07T22:09:32Z",
+    "updated_at": "2026-07-07T22:09:40Z"
+  },
+  {
+    "id": 28901940766,
+    "status": "in_progress",
+    "conclusion": null,
+    "created_at": "2026-07-07T22:05:49Z",
+    "updated_at": "2026-07-07T22:05:59Z"
+  }
+]
