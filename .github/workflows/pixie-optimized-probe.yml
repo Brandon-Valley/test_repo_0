@@ -1,0 +1,102 @@
+name: Pixie Hollow optimized extraction probe
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx6g
+
+jobs:
+  probe:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.comment.body, 'run pixie optimized probe')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Pixie Hollow archive
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download JPEXS Free Flash Decompiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tools/ffdec
+          release_json=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          asset_url=$(printf '%s' "$release_json" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          curl -fL "$asset_url" -o tools/ffdec/ffdec.zip
+          unzip -q tools/ffdec/ffdec.zip -d tools/ffdec/app
+          jar_path=$(find tools/ffdec/app -type f -name 'ffdec.jar' | head -n 1)
+          test -n "$jar_path"
+          echo "FFDEC_JAR=$jar_path" >> "$GITHUB_ENV"
+
+      - name: Inventory repository
+        shell: bash
+        run: |
+          mkdir -p optimized_probe/inventory
+          find source -type f -iname '*.swf' -printf '%s\t%p\n' | sort -nr > optimized_probe/inventory/swf-files.tsv
+          find source -type f -iname '*.swf' | wc -l > optimized_probe/inventory/swf-count.txt
+          find source -type f -iname '*.swf' -printf '%s\n' | awk '{s+=$1} END {print s}' > optimized_probe/inventory/swf-total-bytes.txt
+          du -sh source > optimized_probe/inventory/repository-size.txt
+
+      - name: Run optimized Snowy Lullaby exports
+        shell: bash
+        run: |
+          set +e
+          INPUT="source/swf/panel_content/animalRhythm.swf"
+          OUT="optimized_probe/animalRhythm"
+          mkdir -p "$OUT" optimized_probe/logs
+
+          java -jar "$FFDEC_JAR" -onerror ignore -format "image:png,shape:png,morphshape:png_start_end,button:png" -export "image,shape,morphshape,button,symbolClass" "$OUT/fundamental_png" "$INPUT" > optimized_probe/logs/fundamental.txt 2>&1
+          echo $? > optimized_probe/logs/fundamental-exit.txt
+
+          java -jar "$FFDEC_JAR" -onerror ignore -format "shape:svg,morphshape:svg" -export "shape,morphshape" "$OUT/vector_svg" "$INPUT" > optimized_probe/logs/vector.txt 2>&1
+          echo $? > optimized_probe/logs/vector-exit.txt
+
+          java -jar "$FFDEC_JAR" -onerror ignore -select "all:1" -format "sprite:png" -export "sprite" "$OUT/sprite_first_frames" "$INPUT" > optimized_probe/logs/sprites.txt 2>&1
+          echo $? > optimized_probe/logs/sprites-exit.txt
+
+          java -jar "$FFDEC_JAR" -onerror ignore -ignorebackground -select "0:1" -format "frame:png" -export "frame" "$OUT/root_first_frame" "$INPUT" > optimized_probe/logs/root.txt 2>&1
+          echo $? > optimized_probe/logs/root-exit.txt
+
+          java -jar "$FFDEC_JAR" -onerror ignore -ignorebackground -format "frame:apng" -export "frame" "$OUT/root_animation" "$INPUT" > optimized_probe/logs/apng.txt 2>&1
+          echo $? > optimized_probe/logs/apng-exit.txt
+
+          find optimized_probe -type f -printf '%p\t%s bytes\n' | sort > optimized_probe/inventory/output-files.txt
+          du -ah optimized_probe | sort -h > optimized_probe/inventory/output-disk-usage.txt
+          exit 0
+
+      - name: Upload optimized probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixie-optimized-extraction-probe
+          path: optimized_probe
+          retention-days: 3
+          compression-level: 6
+
+      - name: Report run ID
+        if: always() && github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `PIXIE_OPTIMIZED_PROBE_RUN_ID=${context.runId}\nPIXIE_OPTIMIZED_PROBE_STATUS=${{ job.status }}`
+            });
