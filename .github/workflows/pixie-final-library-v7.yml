@@ -1,0 +1,166 @@
+name: Build and publish final Pixie Hollow image library v7
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+
+env:
+  RELEASE_TAG: pixie-image-library-final-v7
+  ZIP_NAME: Pixie_Hollow_Complete_Image_Library.zip
+
+jobs:
+  build:
+    if: contains(github.event.comment.body, 'launch pixie final library v7')
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - name: Checkout builder repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          path: builder
+
+      - name: Download completed four-shard extraction
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pixie-v4-part-*
+          path: downloaded
+          run-id: 28901940766
+          github-token: ${{ github.token }}
+
+      - name: Merge extraction shards into one library
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Pixie_Hollow_Complete_Image_Library
+          for directory in downloaded/pixie-v4-part-*; do
+            cp -aln "$directory/." Pixie_Hollow_Complete_Image_Library/
+          done
+          rm -rf downloaded
+          echo "Merged files: $(find Pixie_Hollow_Complete_Image_Library -type f | wc -l)"
+          du -sh Pixie_Hollow_Complete_Image_Library
+          df -h .
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install image tools
+        shell: bash
+        run: |
+          python -m pip install --quiet pillow
+          python -m py_compile builder/scripts/pixie_final_assembler.py
+          python -m py_compile builder/scripts/upload_zip_stream_parts.py
+
+      - name: Assemble organized library and logical composites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python builder/scripts/pixie_final_assembler.py --library Pixie_Hollow_Complete_Image_Library
+          test -f Pixie_Hollow_Complete_Image_Library/README.md
+          test -f Pixie_Hollow_Complete_Image_Library/00_metadata/build_summary.json
+          test -f Pixie_Hollow_Complete_Image_Library/05_browse/index.html
+          cat Pixie_Hollow_Complete_Image_Library/00_metadata/build_summary.json
+          du -sh Pixie_Hollow_Complete_Image_Library
+          df -h .
+
+      - name: Validate generated PNGs and indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+          from PIL import Image
+          root = Path('Pixie_Hollow_Complete_Image_Library')
+          summary = json.loads((root / '00_metadata/build_summary.json').read_text())
+          assert summary['unique_swfs'] == 2642
+          assert summary['reconstructed_rgba_images'] > 500
+          assert summary['meadow_variants'] > 100
+          assert summary['indexed_images'] > 100000
+          samples = list((root / '03_reconstructed_images').rglob('*.png'))[:25]
+          samples += list((root / '04_logical_composites').rglob('full_composite.png'))[:25]
+          assert samples
+          for path in samples:
+              with Image.open(path) as image:
+                  image.verify()
+          for filename in ('image_index.csv', 'swf_visual_index.csv', 'meadow_compositions.csv', 'minigame_index.csv'):
+              path = root / '00_metadata' / filename
+              assert path.exists() and path.stat().st_size > 100
+          print('validation passed', summary)
+          PY
+
+      - name: Create or replace durable GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release delete "$RELEASE_TAG" --yes --cleanup-tag
+          fi
+          gh release create "$RELEASE_TAG" \
+            --target master \
+            --title "Pixie Hollow Complete Image Library" \
+            --notes "Complete image library generated from PixieHollowRE/web. The ZIP is stored as numbered binary parts because the completed archive is larger than a single GitHub asset. Concatenate the parts in numeric order to restore the single ZIP."
+
+      - name: Stream one ZIP into release parts without duplicating it on disk
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          zip -0 -r - Pixie_Hollow_Complete_Image_Library \
+            | python builder/scripts/upload_zip_stream_parts.py \
+                --tag "$RELEASE_TAG" \
+                --prefix "$ZIP_NAME" \
+                --chunk-size 471859200 \
+                --manifest Pixie_Hollow_Complete_Image_Library.zip.parts.json
+          test -s Pixie_Hollow_Complete_Image_Library.zip.parts.json
+          cp Pixie_Hollow_Complete_Image_Library/README.md README_Pixie_Hollow_Complete_Image_Library.md
+          gh release upload "$RELEASE_TAG" \
+            Pixie_Hollow_Complete_Image_Library.zip.parts.json \
+            README_Pixie_Hollow_Complete_Image_Library.md \
+            --clobber
+          cat Pixie_Hollow_Complete_Image_Library.zip.parts.json
+
+      - name: Save final release metadata in repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p builder/status
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path('Pixie_Hollow_Complete_Image_Library.zip.parts.json').read_text())
+          manifest['workflow_run_id'] = '${{ github.run_id }}'
+          manifest['release_url'] = 'https://github.com/${{ github.repository }}/releases/tag/${{ env.RELEASE_TAG }}'
+          Path('builder/status/pixie-final-library-v7.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+          cd builder
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add status/pixie-final-library-v7.json
+          git commit -m "Record final Pixie library release metadata" || true
+          git pull --rebase origin master
+          git push origin master
+
+      - name: Report completion
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `PIXIE_FINAL_V7_RUN_ID=${context.runId}\nSTATUS=${{ job.status }}\nRELEASE_TAG=${process.env.RELEASE_TAG}`
+            });
