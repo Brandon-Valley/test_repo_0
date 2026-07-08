@@ -1,0 +1,76 @@
+name: Build one-download complete Pixie ZIP v9
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  build:
+    if: contains(github.event.comment.body, 'launch pixie complete single artifact v9')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Download all 21 final ZIP pieces
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p parts
+          gh release download pixie-image-library-final-v7 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Pixie_Hollow_Complete_Image_Library.zip.part-*' \
+            --dir parts
+          count=$(find parts -maxdepth 1 -type f -name 'Pixie_Hollow_Complete_Image_Library.zip.part-*' | wc -l)
+          test "$count" -eq 21
+          ls -lh parts | tail
+
+      - name: Reassemble final ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat parts/Pixie_Hollow_Complete_Image_Library.zip.part-* > Pixie_Hollow_Complete_Image_Library.zip
+          actual_size=$(stat -c '%s' Pixie_Hollow_Complete_Image_Library.zip)
+          test "$actual_size" -eq 9617871171
+          echo "Complete ZIP size: $actual_size"
+
+      - name: Verify final ZIP checksum and integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '6555f8467753b2c3f143c11b28f46f1b19f38f3739d951f74242ac0d35b07950  Pixie_Hollow_Complete_Image_Library.zip' | sha256sum -c -
+          unzip -t Pixie_Hollow_Complete_Image_Library.zip > zip-test.log
+          tail -n 5 zip-test.log
+          grep -q 'No errors detected' zip-test.log
+
+      - name: Remove pieces before artifact upload
+        shell: bash
+        run: |
+          rm -rf parts
+          df -h .
+          ls -lh Pixie_Hollow_Complete_Image_Library.zip
+
+      - name: Upload one complete downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pixie_Hollow_Complete_Image_Library_COMPLETE
+          path: Pixie_Hollow_Complete_Image_Library.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+      - name: Report completion
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `PIXIE_COMPLETE_SINGLE_ARTIFACT_V9_RUN_ID=${context.runId}\nSTATUS=${{ job.status }}`
+            });
