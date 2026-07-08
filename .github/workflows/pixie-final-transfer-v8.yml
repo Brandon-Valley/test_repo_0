@@ -1,0 +1,56 @@
+name: Transfer final Pixie ZIP pieces v8
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  transfer:
+    if: contains(github.event.comment.body, 'launch pixie final transfer v8')
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download one final ZIP release piece
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          padded=$(printf '%03d' '${{ matrix.part }}')
+          name="Pixie_Hollow_Complete_Image_Library.zip.part-${padded}"
+          gh release download pixie-image-library-final-v7 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$name" \
+            --dir transfer
+          test -s "transfer/$name"
+          sha256sum "transfer/$name" > "transfer/$name.sha256"
+          ls -lh "transfer/$name"
+
+      - name: Upload connector-sized transfer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixie-final-zip-part-${{ matrix.part }}
+          path: transfer/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+      - name: Report piece completion
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `PIXIE_FINAL_TRANSFER_V8_RUN_ID=${context.runId} PART=${{ matrix.part }} STATUS=${{ job.status }}`
+            });
