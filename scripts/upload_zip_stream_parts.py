@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -13,6 +12,7 @@ from pathlib import Path
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument('--repo', required=True)
     parser.add_argument('--tag', required=True)
     parser.add_argument('--prefix', required=True)
     parser.add_argument('--chunk-size', type=int, default=471859200)
@@ -43,7 +43,10 @@ def main() -> None:
         if written == 0:
             path.unlink(missing_ok=True)
             break
-        subprocess.run(['gh', 'release', 'upload', args.tag, str(path), '--clobber'], check=True)
+        subprocess.run([
+            'gh', 'release', 'upload', args.tag, str(path),
+            '--repo', args.repo, '--clobber'
+        ], check=True)
         parts.append({'index': index, 'name': name, 'bytes': written, 'sha256': part_hash.hexdigest()})
         print(f'uploaded {name} {written} bytes', flush=True)
         path.unlink(missing_ok=True)
@@ -54,6 +57,7 @@ def main() -> None:
     manifest = {
         'format': 'ordered binary chunks of one ZIP file',
         'zip_filename': args.prefix,
+        'repository': args.repo,
         'release_tag': args.tag,
         'chunk_size': args.chunk_size,
         'total_bytes': total,
