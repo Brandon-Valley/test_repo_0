@@ -1,0 +1,54 @@
+name: Capture Pixie final v7 error robustly
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+
+jobs:
+  capture:
+    if: contains(github.event.comment.body, 'capture pixie final v7 error robustly')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - name: Download logs with curl
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p status
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/jobs/85782600154/logs" \
+            -o status/pixie-final-v7-raw-logs
+          file status/pixie-final-v7-raw-logs > status/pixie-final-v7-log-type.txt
+          if unzip -t status/pixie-final-v7-raw-logs >/dev/null 2>&1; then
+            unzip -p status/pixie-final-v7-raw-logs > status/pixie-final-v7-job.log
+          else
+            cp status/pixie-final-v7-raw-logs status/pixie-final-v7-job.log
+          fi
+          tail -n 220 status/pixie-final-v7-job.log > status/pixie-final-v7-error-tail.log
+      - name: Commit captured error
+        shell: bash
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add status/pixie-final-v7-log-type.txt status/pixie-final-v7-job.log status/pixie-final-v7-error-tail.log
+          git commit -m "Capture final Pixie v7 error details" || true
+          git pull --rebase origin master
+          git push origin master
+      - name: Report capture status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_ERROR_CAPTURE_RUN=${context.runId} STATUS=${{ job.status }}`});
