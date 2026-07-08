@@ -75,7 +75,6 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import csv
           import json
           from pathlib import Path
           from PIL import Image
@@ -103,10 +102,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release delete "$RELEASE_TAG" --yes --cleanup-tag
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
           fi
           gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --target master \
             --title "Pixie Hollow Complete Image Library" \
             --notes "Complete image library generated from PixieHollowRE/web. The ZIP is stored as numbered binary parts because the completed archive is larger than a single GitHub asset. Concatenate the parts in numeric order to restore the single ZIP."
@@ -120,6 +120,7 @@ jobs:
           set -o pipefail
           zip -0 -r - Pixie_Hollow_Complete_Image_Library \
             | python builder/scripts/upload_zip_stream_parts.py \
+                --repo "$GITHUB_REPOSITORY" \
                 --tag "$RELEASE_TAG" \
                 --prefix "$ZIP_NAME" \
                 --chunk-size 471859200 \
@@ -129,6 +130,7 @@ jobs:
           gh release upload "$RELEASE_TAG" \
             Pixie_Hollow_Complete_Image_Library.zip.parts.json \
             README_Pixie_Hollow_Complete_Image_Library.md \
+            --repo "$GITHUB_REPOSITORY" \
             --clobber
           cat Pixie_Hollow_Complete_Image_Library.zip.parts.json
 
