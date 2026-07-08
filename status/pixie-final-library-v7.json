@@ -1,0 +1,141 @@
+{
+  "format": "ordered binary chunks of one ZIP file",
+  "zip_filename": "Pixie_Hollow_Complete_Image_Library.zip",
+  "repository": "Brandon-Valley/test_repo_0",
+  "release_tag": "pixie-image-library-final-v7",
+  "chunk_size": 471859200,
+  "total_bytes": 9617871171,
+  "zip_sha256": "6555f8467753b2c3f143c11b28f46f1b19f38f3739d951f74242ac0d35b07950",
+  "part_count": 21,
+  "parts": [
+    {
+      "index": 0,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-000",
+      "bytes": 471859200,
+      "sha256": "6aff7978825912bf31b5ac1f91db78acc25edb3441ce81ac1d3bfae3fea976ec"
+    },
+    {
+      "index": 1,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-001",
+      "bytes": 471859200,
+      "sha256": "455046a88f4d8e4e7eb14a678387845dd55d1c045d5481ebeec427f6982b754f"
+    },
+    {
+      "index": 2,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-002",
+      "bytes": 471859200,
+      "sha256": "a63669da2e4d742a4abeacceb0227ba2833157a9dcf487e06deb81e58ff4d381"
+    },
+    {
+      "index": 3,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-003",
+      "bytes": 471859200,
+      "sha256": "c3bafc5e90298ae2ff101bbdedcd56f584bdb7ff058fa2cd1f5502c875a7d8e2"
+    },
+    {
+      "index": 4,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-004",
+      "bytes": 471859200,
+      "sha256": "8d7e1a51d31f1251dd85bc806454f4d297b4359339920e30d7c3a2c432cc094b"
+    },
+    {
+      "index": 5,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-005",
+      "bytes": 471859200,
+      "sha256": "67c6d198cfa8cea72cdad3d927c7830b22b7b3251a899ec84447bbf72afde9e4"
+    },
+    {
+      "index": 6,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-006",
+      "bytes": 471859200,
+      "sha256": "c4967372b5f7d5b687d909b2d06b0b7d5eb9134fd472068aa280d5cabff9abf2"
+    },
+    {
+      "index": 7,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-007",
+      "bytes": 471859200,
+      "sha256": "ddddceb5b2bfed1a0d1de46438f522ed82a011fa1fce8cb392922773e60483b8"
+    },
+    {
+      "index": 8,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-008",
+      "bytes": 471859200,
+      "sha256": "e215dd4cbcdc5b1e86c059546a0032b1fd76d9f189d8e22320a10c9f84845a34"
+    },
+    {
+      "index": 9,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-009",
+      "bytes": 471859200,
+      "sha256": "c0c07355fa1b491ab3a8265f407c2ec8a9402d1c36dd796585c152b274a9df0d"
+    },
+    {
+      "index": 10,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-010",
+      "bytes": 471859200,
+      "sha256": "4f64bf524be3b162e2b845065976c6084ed487d718ad0eb7251866e10f7e2d64"
+    },
+    {
+      "index": 11,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-011",
+      "bytes": 471859200,
+      "sha256": "8a18724200d639c45199f9daaf63c083ad0456e52a926950e61d1929cf5b19b0"
+    },
+    {
+      "index": 12,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-012",
+      "bytes": 471859200,
+      "sha256": "19151490f63a7b1d2fed35dfd021e025a66f3aa4dcfe3778be5bc246cfa0f11b"
+    },
+    {
+      "index": 13,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-013",
+      "bytes": 471859200,
+      "sha256": "6332a5a799e4704b6178dc05004abd65da7d6d497e608eafb54af299f2d02e63"
+    },
+    {
+      "index": 14,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-014",
+      "bytes": 471859200,
+      "sha256": "c496e6e0d15dd590c83d7f5055f55a20f8780421bb9fe794ea5274d28e7d4900"
+    },
+    {
+      "index": 15,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-015",
+      "bytes": 471859200,
+      "sha256": "c9dbbdf7c8138686a8e7a90a5765b29b4410542156893e5ceb701dd71248b421"
+    },
+    {
+      "index": 16,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-016",
+      "bytes": 471859200,
+      "sha256": "13e2c1bf02f3e12ec8f7a6fc69b2a2306e60469e4caea6603882421121e1fdd3"
+    },
+    {
+      "index": 17,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-017",
+      "bytes": 471859200,
+      "sha256": "906ce6cf174e4c8a6a744c67bae80089e144a68e3ff5b7a1a1645c6c7159913c"
+    },
+    {
+      "index": 18,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-018",
+      "bytes": 471859200,
+      "sha256": "184e71d4c94864cfee7922b1340a591588132efbe306f8308f97b95cc01f2d08"
+    },
+    {
+      "index": 19,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-019",
+      "bytes": 471859200,
+      "sha256": "8817e189ec5699e3418a6b2963b8a3be9901c78edec53828ca9a2eae0590b85e"
+    },
+    {
+      "index": 20,
+      "name": "Pixie_Hollow_Complete_Image_Library.zip.part-020",
+      "bytes": 180687171,
+      "sha256": "2dea18b75debbd9d2ade418cc154926bdc177c43d608a973b93a06bd55de1246"
+    }
+  ],
+  "reassembly": "Concatenate parts in numeric order without modifying them.",
+  "workflow_run_id": "28916527074",
+  "release_url": "https://github.com/Brandon-Valley/test_repo_0/releases/tag/pixie-image-library-final-v7"
+}
