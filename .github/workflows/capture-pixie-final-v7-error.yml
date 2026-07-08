@@ -1,0 +1,36 @@
+name: Capture Pixie final v7 error
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  capture:
+    if: contains(github.event.comment.body, 'capture pixie final v7 error')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - name: Download failed job logs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p status
+          gh api -H 'Accept: application/vnd.github+json' /repos/${{ github.repository }}/actions/jobs/85782600154/logs > status/pixie-final-v7-job.log
+          tail -n 160 status/pixie-final-v7-job.log > status/pixie-final-v7-error-tail.log
+      - name: Commit captured error
+        shell: bash
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add status/pixie-final-v7-job.log status/pixie-final-v7-error-tail.log
+          git commit -m "Capture Pixie final v7 workflow error" || true
+          git pull --rebase origin master
+          git push origin master
