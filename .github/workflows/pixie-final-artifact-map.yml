@@ -1,0 +1,41 @@
+name: Save final Pixie transfer artifact map
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  save:
+    if: contains(github.event.comment.body, 'save pixie final artifact map')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            let page = 1;
+            const artifacts = [];
+            while (true) {
+              const response = await github.rest.actions.listWorkflowRunArtifacts({owner: context.repo.owner, repo: context.repo.repo, run_id: 28917293431, per_page: 100, page});
+              artifacts.push(...response.data.artifacts.map(a => ({id:a.id,name:a.name,size_in_bytes:a.size_in_bytes,digest:a.digest,expired:a.expired})));
+              if (response.data.artifacts.length < 100) break;
+              page++;
+            }
+            artifacts.sort((a,b) => Number(a.name.match(/(\d+)$/)[1]) - Number(b.name.match(/(\d+)$/)[1]));
+            const fs = require('fs');
+            fs.mkdirSync('status',{recursive:true});
+            fs.writeFileSync('status/pixie-final-artifact-map.json',JSON.stringify(artifacts,null,2));
+      - shell: bash
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add status/pixie-final-artifact-map.json
+          git commit -m "Save final Pixie transfer artifact map" || true
+          git pull --rebase origin master
+          git push origin master
