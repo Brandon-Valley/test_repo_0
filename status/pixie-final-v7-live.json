@@ -1,5 +1,13 @@
 [
   {
+    "id": 28916540395,
+    "status": "completed",
+    "conclusion": "skipped",
+    "created_at": "2026-07-08T04:02:17Z",
+    "updated_at": "2026-07-08T04:02:18Z",
+    "jobs": []
+  },
+  {
     "id": 28916530428,
     "status": "completed",
     "conclusion": "skipped",
@@ -116,21 +124,6 @@
     "conclusion": "skipped",
     "created_at": "2026-07-08T03:59:05Z",
     "updated_at": "2026-07-08T03:59:15Z",
-    "jobs": [
-      {
-        "name": "build",
-        "status": "completed",
-        "conclusion": "skipped",
-        "steps": []
-      }
-    ]
-  },
-  {
-    "id": 28916353727,
-    "status": "completed",
-    "conclusion": "skipped",
-    "created_at": "2026-07-08T03:57:14Z",
-    "updated_at": "2026-07-08T03:57:15Z",
     "jobs": [
       {
         "name": "build",
