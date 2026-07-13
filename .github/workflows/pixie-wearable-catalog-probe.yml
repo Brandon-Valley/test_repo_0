@@ -1,0 +1,94 @@
+name: Pixie Hollow wearable catalog source probe
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx3000m
+
+jobs:
+  probe:
+    if: contains(github.event.comment.body, 'launch pixie wearable catalog probe')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: web
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web-api
+          ref: main
+          path: web-api
+          fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/game-server
+          ref: main
+          path: game-server
+          fetch-depth: 1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq ripgrep file
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          mkdir -p tools/ffdec
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Inventory and grep all catalog-like sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe/reports probe/file_lists probe/scripts
+          find web web-api game-server -type f -printf '%p\t%s\n' | sort > probe/file_lists/all_files.tsv
+          find web web-api game-server -type f | grep -Ei '(item|inventory|wardrobe|outfit|clothing|shop|catalog|asset|avatar|dna|manifest|database|seed|fixture)' | sort > probe/file_lists/catalog_candidate_files.txt || true
+          rg -n -i --hidden --glob '!*.swf' --glob '!*.png' --glob '!*.jpg' --glob '!*.jpeg' --glob '!*.gif' --glob '!*.mp3' --glob '!*.ogg' --glob '!*.zip' --glob '!*.woff*' --glob '!*.ttf' '(item_id|itemId|WardrobeCollection|ChestPiece|SkirtLeftPiece|SleeveLeftPiece|inventoryId|asset_id|first_chestpiece|QueensBoutique|Outfits)' web web-api game-server > probe/reports/catalog_field_hits.txt || true
+          rg -n -i --hidden --glob '!*.swf' '(shop|wardrobe|inventory|item|outfit)' web-api game-server > probe/reports/backend_catalog_hits.txt || true
+          find web web-api game-server -type f \( -iname '*.db' -o -iname '*.sqlite*' -o -iname '*.bson' -o -iname '*.csv' -o -iname '*.tsv' -o -iname '*.json' -o -iname '*.xml' -o -iname '*.yaml' -o -iname '*.yml' -o -iname '*.sql' -o -iname '*.lua' \) -printf '%p\t%s\n' | sort > probe/file_lists/data_files.tsv
+      - name: Export scripts from wardrobe, shop, avatar, and core SWFs
+        shell: bash
+        run: |
+          set -euo pipefail
+          find web -type f -iname '*.swf' | grep -Ei '(wardrobe|closet|shop|avatar|container|framework|core|catalog|inventory|savedoutfit|outfit)' | sort -u > probe/file_lists/candidate_runtime_swfs.txt || true
+          count=0
+          while IFS= read -r input; do
+            [ -n "$input" ] || continue
+            rel=${input#web/}
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._-]+#_#g')
+            timeout 360s java -jar "$FFDEC_JAR" -onerror ignore -export script "probe/scripts/${safe}" "$input" > "probe/scripts/${safe}.log" 2>&1 || true
+            count=$((count+1))
+            [ "$count" -lt 160 ] || break
+          done < probe/file_lists/candidate_runtime_swfs.txt
+          rg -n -i '(item_id|itemId|asset_id|WardrobeCollection|ChestPiece|SkirtLeftPiece|SleeveLeftPiece|inventoryId|getDefinitionByName|addChild|piece|frame)' probe/scripts > probe/reports/runtime_assembly_hits.txt || true
+          find probe -type f -size 0 -delete || true
+          du -sh probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-wearable-catalog-probe
+          path: probe
+          retention-days: 3
+          compression-level: 6
+      - name: Report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:context.issue.number,body:`PIXIE_WEARABLE_CATALOG_PROBE_RUN_ID=${context.runId} STATUS=${{ job.status }}`});
