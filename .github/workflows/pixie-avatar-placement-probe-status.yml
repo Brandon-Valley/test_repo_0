@@ -6,6 +6,7 @@ on:
 
 permissions:
   actions: read
+  contents: write
   issues: write
 
 jobs:
@@ -17,5 +18,10 @@ jobs:
         with:
           script: |
             const runs = await github.rest.actions.listWorkflowRuns({owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'pixie-avatar-placement-probe.yml', per_page: 5});
-            const lines = runs.data.workflow_runs.map(r => `run=${r.id} status=${r.status} conclusion=${r.conclusion || 'none'} created=${r.created_at}`);
+            const payload = {generated_at: new Date().toISOString(), runs: runs.data.workflow_runs.map(r => ({id:r.id,status:r.status,conclusion:r.conclusion,created_at:r.created_at,updated_at:r.updated_at,html_url:r.html_url}))};
+            const path = 'status/pixie-avatar-placement-probe.json';
+            let sha;
+            try { const old = await github.rest.repos.getContent({owner:context.repo.owner,repo:context.repo.repo,path}); sha = old.data.sha; } catch (e) { if (e.status !== 404) throw e; }
+            await github.rest.repos.createOrUpdateFileContents({owner:context.repo.owner,repo:context.repo.repo,path,message:'Update avatar placement probe status',content:Buffer.from(JSON.stringify(payload,null,2)+'\n').toString('base64'),sha});
+            const lines = payload.runs.map(r => `run=${r.id} status=${r.status} conclusion=${r.conclusion || 'none'} created=${r.created_at}`);
             await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_AVATAR_PLACEMENT_PROBE_STATUS\n${lines.join('\n')}`});
