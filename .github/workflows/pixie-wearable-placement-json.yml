@@ -1,0 +1,188 @@
+name: Build complete Pixie wearable placement JSON
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1600m
+
+jobs:
+  build:
+    if: contains(github.event.comment.body, 'launch complete pixie wearable placement json')
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: toolsrepo
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          mkdir -p tools/ffdec
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Select and deduplicate every wearable or avatar bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/xml work/logs output
+          find source/swf -maxdepth 1 -type f -iname '*.swf' | grep -Ei '(avatar(0[1-9]|10|base|collection|_sparrowmen)|outfit|hair|wings|sparrowmen|neverCouncilAvatar|playmatesAvatar|winterOutfit|peri.*tint)' | grep -Eiv '(aura|effect|masquerade|clickable|decoration)' | sort -u > work/candidates_all.txt
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          groups={}
+          for line in Path('work/candidates_all.txt').read_text().splitlines():
+              path=Path(line); h=hashlib.sha256()
+              with path.open('rb') as stream:
+                  for block in iter(lambda:stream.read(1024*1024),b''):h.update(block)
+              groups.setdefault(h.hexdigest(),[]).append(line)
+          rows=[]
+          for digest,paths in sorted(groups.items()):
+              paths=sorted(paths,key=lambda x:(len(x),x)); rows.append((digest,paths[0],paths))
+          with Path('work/candidates.tsv').open('w') as handle:
+              for digest,primary,paths in rows: handle.write(f'{digest}\t{primary}\t'+repr(paths)+'\n')
+          print('candidate paths',sum(len(x[2]) for x in rows),'unique swfs',len(rows))
+          PY
+      - name: Convert all selected SWFs to JPEXS XML
+        shell: bash
+        run: |
+          set -euo pipefail
+          export FFDEC_JAR
+          cut -f1,2 work/candidates.tsv | xargs -P 3 -d '\n' -I LINE bash -c '
+            line="$1"; digest=${line%%$'"'"'\t'"'"'*}; input=${line#*$'"'"'\t'"'"'};
+            output="work/xml/${digest}.xml";
+            printf "%s\n" "${input#source/}" > "work/xml/${digest}.source.txt";
+            timeout 900s java -jar "$FFDEC_JAR" -onerror ignore -swf2xml "$input" "$output" > "work/logs/${digest}.log" 2>&1 || true;
+            test -s "$output" || rm -f "$output";
+          ' _ LINE
+          printf 'converted XML files: '; find work/xml -type f -name '*.xml' | wc -l
+          du -sh work/xml
+      - name: Patch extractor to stream documents and conserve memory
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp toolsrepo/scripts/pixie_wearable_placement_extractor.py work/extractor.py
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('work/extractor.py'); text=path.read_text()
+          start=text.index('    docs=[]\n')
+          end=text.index('    items=parse_items(source_root)\n')
+          replacement='''    symbols=[];class_index=defaultdict(list);poses={};doc_count=0
+          for path in sorted(xml_dir.rglob('*.xml')):
+              source_file=path.with_suffix('.source.txt');source=source_file.read_text(errors='ignore').strip() if source_file.exists() else path.stem+'.swf'
+              try:doc=SwfDoc(path,source)
+              except Exception as exc:
+                  print('parse failure',path,exc,file=sys.stderr);continue
+              doc_count+=1;digest=None;swf_path=source_root/doc.source_swf
+              if swf_path.exists():
+                  h=hashlib.sha256()
+                  with swf_path.open('rb') as stream:
+                      for block in iter(lambda:stream.read(1024*1024),b''):h.update(block)
+                  digest=h.hexdigest()
+              for cid,name in doc.symbols:
+                  category,confidence,evidence=classify(name);bounds=doc.bounds(cid);display=doc.display_list(cid)
+                  entry={'symbol_id':f'{doc.source_swf}::{name}','class_name':name,'character_id':cid,'source_swf':doc.source_swf,'source_swf_sha256':digest,'category':category,'classification_confidence':confidence,'classification_evidence':evidence,'heuristic_outfit_group':group_key(name),'local_bounds':rect_json(bounds),'display_list':display,'named_layers':[x for x in display if x.get('name')],'origin_px_in_trimmed_image':({'x':rnd(-bounds[0]/20),'y':rnd(-bounds[1]/20)} if bounds else None)}
+                  symbols.append(entry);class_index[name.lower()].append({'symbol_id':entry['symbol_id'],'class_name':name,'source_swf':doc.source_swf,'character_id':cid,'category':category,'local_bounds':entry['local_bounds']})
+                  slots=doc.slot_paths(cid)
+                  if slots and (name in BODY_WORDS or 'pose' in name.lower() or 'animation' in name.lower() or name=='VectorModelContainer'):
+                      poses[entry['symbol_id']]={'pose_name':name,'source_swf':doc.source_swf,'character_id':cid,'slots':slots}
+              del doc
+          '''
+          text=text[:start]+replacement+text[end:]
+          text=text.replace("'swf_xml_documents':len(docs)","'swf_xml_documents':doc_count")
+          path.write_text(text)
+          PY
+          python -m py_compile work/extractor.py
+      - name: Build and enrich the complete JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          python work/extractor.py --xml-dir work/xml --source-root source --output output/pixie_hollow_wearable_placement_data.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path=Path('output/pixie_hollow_wearable_placement_data.json'); data=json.loads(path.read_text())
+          category_slots={
+            'chest':['ChestPiece'],'sleeve_left':['SleeveLeftPiece'],'sleeve_right':['SleeveRightPiece'],
+            'sleeve_left_lower':['SleeveLeftLowerPiece'],'sleeve_right_lower':['SleeveRightLowerPiece'],
+            'skirt_left':['SkirtLeftPiece','ShortsLeftPiece'],'skirt_right':['SkirtRightPiece','ShortsRightPiece'],
+            'skirt':['SkirtLeftPiece','SkirtRightPiece'],'leg_left_upper':['PantLeftPiece','ShortsLeftPiece','SkirtLeftPiece'],
+            'leg_right_upper':['PantRightPiece','ShortsRightPiece','SkirtRightPiece'],'leg_left_lower':['PantLeftPiece'],
+            'leg_right_lower':['PantRightPiece'],'shoe':['ShoeLeftPiece','ShoeRightPiece'],'head':['HeadPiece'],
+            'hair_front':['HairFrontPiece'],'hair_back':['HairBackPiece'],'wings':['WingsPiece'],'necklace':['NecklacePiece'],
+            'waist':['WaistPiece'],'wrist':['WristPiece'],'ankle':['AnklePiece'],'face':['FacePiece'],'eyes':['EyesPiece']}
+          data['category_to_slot_names']=category_slots
+          neutral=[]
+          for pose_id,pose in data['poses'].items():
+              if pose['pose_name'] in ('VectorModelContainer','MaleVectorModelContainer'):
+                  neutral.append((pose_id,pose))
+          for symbol in data['wearable_symbols']:
+              targets=category_slots.get(symbol['category'],[]); symbol['recommended_slot_names']=targets; placements=[]
+              box=symbol.get('local_bounds')
+              for pose_id,pose in neutral:
+                  for slot in pose['slots']:
+                      if slot['instance_name'] not in targets: continue
+                      placements.append({'pose_id':pose_id,'pose_name':pose['pose_name'],'slot_path':slot['path'],'slot_name':slot['instance_name'],'depth_path':slot['depth_path'],'world_matrix':slot['world_matrix'],'local_bounds':box})
+              symbol['neutral_pose_placements']=placements
+          for item in data['catalog_items']:
+              for piece in item['pieces']:
+                  piece['target_slot_names']=[piece['piece_type']]
+          data['_meta']['use_in_dress_up']='For a trimmed PNG, use origin_px_in_trimmed_image as its local registration point. Place that registration point at the chosen pose slot origin and apply the slot affine matrix. For different poses, look up the same slot name in poses.'
+          path.write_text(json.dumps(data,indent=2,ensure_ascii=False)+'\n')
+          print(json.dumps(data['statistics'],indent=2)); print('final bytes',path.stat().st_size)
+          PY
+      - name: Validate output
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('output/pixie_hollow_wearable_placement_data.json'); d=json.loads(p.read_text())
+          assert d['statistics']['swf_xml_documents'] > 50
+          assert d['statistics']['wearable_and_avatar_symbols'] > 1000
+          assert d['statistics']['pose_definitions'] > 10
+          assert len(d['wearable_symbols']) == d['statistics']['wearable_and_avatar_symbols']
+          assert any(x['neutral_pose_placements'] for x in d['wearable_symbols'])
+          print('VALID',p.stat().st_size,d['statistics'])
+          PY
+          sha256sum output/pixie_hollow_wearable_placement_data.json > output/pixie_hollow_wearable_placement_data.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-hollow-wearable-placement-json
+          path: output
+          retention-days: 3
+          compression-level: 9
+      - name: Report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:context.issue.number,body:`PIXIE_WEARABLE_PLACEMENT_JSON_RUN_ID=${context.runId} STATUS=${{ job.status }}`});
