@@ -1,0 +1,100 @@
+name: Pixie Hollow avatar placement probe
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx3000m
+
+jobs:
+  probe:
+    if: contains(github.event.comment.body, 'launch pixie avatar placement probe')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq tree
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          mkdir -p tools/ffdec
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Locate avatar and wearable assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe/file_lists probe/xml probe/scripts probe/renders probe/source_xml
+          find source -type f -iname '*.swf' | grep -Ei '(avatar|piece|wardrobe|closet|outfit|dress|shirt|skirt|pants|shoe|head|hair|wings|necklace|wrist|ankle|waist|sleeve|chest)' | sort > probe/file_lists/relevant_swfs.txt || true
+          find source -type f -iname '*.xml' | sort > probe/file_lists/all_xml.txt
+          cp source/xml/demoResponses/FairiesWardrobeResponse.xml probe/source_xml/ 2>/dev/null || true
+          cp source/xml/demoResponses/FairiesAvatarResponse.xml probe/source_xml/ 2>/dev/null || true
+          printf 'Relevant SWFs: '; wc -l < probe/file_lists/relevant_swfs.txt
+          sed -n '1,300p' probe/file_lists/relevant_swfs.txt
+      - name: Convert representative SWFs to XML and export scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t picks < <(find source -type f \( -iname 'first_chestpiece.swf' -o -iname 'first_sleeveleftpiece.swf' -o -iname 'first_sleeverightpiece.swf' -o -iname 'first_headpiece.swf' -o -iname 'first_skirtleftpiece.swf' -o -iname 'first_shoepiece.swf' -o -iname 'avatarbase.swf' -o -iname 'avatar.swf' -o -iname '*avatar*.swf' \) | sort -u | head -n 30)
+          printf '%s\n' "${picks[@]}" > probe/file_lists/selected_swfs.txt
+          for input in "${picks[@]}"; do
+            rel=${input#source/}
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._-]+#_#g')
+            timeout 300s java -jar "$FFDEC_JAR" -onerror ignore -swf2xml "$input" "probe/xml/${safe}.xml" > "probe/xml/${safe}.log" 2>&1 || true
+            timeout 300s java -jar "$FFDEC_JAR" -onerror ignore -export script "probe/scripts/${safe}" "$input" > "probe/scripts/${safe}.log" 2>&1 || true
+          done
+          find probe -type f -size 0 -delete || true
+      - name: Render all frames for representative piece SWFs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pieces < <(find source -type f \( -iname 'first_chestpiece.swf' -o -iname 'first_sleeveleftpiece.swf' -o -iname 'first_headpiece.swf' -o -iname 'first_skirtleftpiece.swf' -o -iname 'first_shoepiece.swf' \) | sort -u | head -n 15)
+          for input in "${pieces[@]}"; do
+            rel=${input#source/}
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._-]+#_#g')
+            timeout 600s java -jar "$FFDEC_JAR" -onerror ignore -ignorebackground -format 'frame:png' -export frame "probe/renders/${safe}" "$input" > "probe/renders/${safe}.log" 2>&1 || true
+          done
+          find probe -type f -size 0 -delete || true
+      - name: Create searchable grep reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe/reports
+          grep -RniE 'ChestPiece|SleeveLeftPiece|SleeveRightPiece|SkirtLeftPiece|HeadPiece|ShoeLeftPiece|WristPiece|AnklePiece|WaistPiece|NecklacePiece|HairFrontPiece|WingsPiece' probe/xml probe/scripts > probe/reports/piece_slot_hits.txt || true
+          grep -RniE 'PlaceObject|Matrix|translateX|translateY|scaleX|scaleY|rotate|rotation|depth|FrameLabel|instanceName|name=' probe/xml > probe/reports/placement_hits.txt || true
+          grep -RniE 'wardrobe|avatar|piece|frame|asset|equip|clothing|outfit' probe/scripts > probe/reports/avatar_script_hits.txt || true
+          du -sh probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-avatar-placement-probe
+          path: probe
+          retention-days: 3
+          compression-level: 6
+      - name: Report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_AVATAR_PLACEMENT_PROBE_RUN_ID=${context.runId} STATUS=${{ job.status }}`});
