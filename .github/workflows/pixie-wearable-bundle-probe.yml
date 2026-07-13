@@ -1,0 +1,97 @@
+name: Pixie Hollow wearable bundle probe
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx3000m
+
+jobs:
+  probe:
+    if: contains(github.event.comment.body, 'launch pixie wearable bundle probe')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          mkdir -p tools/ffdec
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Export representative bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe/xml probe/scripts probe/lists
+          patterns=(
+            'avatarCollection001.swf'
+            'ms20_Outfits001.swf'
+            'ms21_Outfits_December_2012.swf'
+            'ms23_Outfits_QueensBoutique_001_2013.swf'
+            'Hair_Fronts_Backs_Color_01.swf'
+            'Wings_01.swf'
+            'MS22_Peri_Tint_Outfit.swf'
+            'ms18_New_Hairfronts.swf'
+            'ms18_New_Hairbacks.swf'
+          )
+          : > probe/lists/selected.txt
+          for pattern in "${patterns[@]}"; do
+            input=$(find source/swf -maxdepth 2 -type f -iname "$pattern" | head -n 1 || true)
+            [ -n "$input" ] || continue
+            echo "$input" >> probe/lists/selected.txt
+            safe=$(basename "${input%.swf}" | sed -E 's#[^A-Za-z0-9._-]+#_#g')
+            timeout 600s java -jar "$FFDEC_JAR" -onerror ignore -swf2xml "$input" "probe/xml/${safe}.xml" > "probe/xml/${safe}.log" 2>&1 || true
+            timeout 600s java -jar "$FFDEC_JAR" -onerror ignore -export script "probe/scripts/${safe}" "$input" > "probe/scripts/${safe}.log" 2>&1 || true
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          import json
+          rows=[]
+          for path in Path('probe/xml').glob('*.xml'):
+              root=ET.parse(path).getroot()
+              for tag in root.find('tags'):
+                  if tag.attrib.get('type')=='SymbolClassTag':
+                      ids=[int(x.text) for x in tag.find('tags')]
+                      names=[x.text or '' for x in tag.find('names')]
+                      rows.extend({'source_xml':path.name,'character_id':i,'class_name':n} for i,n in zip(ids,names))
+          Path('probe/lists/symbol_classes.json').write_text(json.dumps(rows,indent=2)+'\n',encoding='utf-8')
+          print('symbols',len(rows))
+          PY
+          grep -RniE 'chest|sleeve|skirt|pant|short|shoe|head|hair|wing|neck|brace|ank|belt|waist|wrist' probe/scripts > probe/lists/wearable_script_hits.txt || true
+          du -sh probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-wearable-bundle-probe
+          path: probe
+          retention-days: 3
+          compression-level: 6
+      - name: Report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_WEARABLE_BUNDLE_PROBE_RUN_ID=${context.runId} STATUS=${{ job.status }}`});
