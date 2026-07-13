@@ -1,0 +1,60 @@
+name: Extract exact Pixie cached media item map
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  build:
+    if: contains(github.event.comment.body, 'launch pixie cacheable media map')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Parse cacheableMedia.xml
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          python - <<'PY'
+          import json,re
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          path=Path('source/xml/cacheableMedia.xml'); root=ET.parse(path).getroot()
+          swfs={}
+          links=[]
+          for el in root.iter():
+              if el.tag=='swf' and el.get('id'):
+                  swfs[el.get('id')]={'swf_id':el.get('id'),'url':el.get('url')}
+              elif el.tag=='asset' and el.get('type')=='link' and el.get('id'):
+                  asset_id=el.get('id');match=re.fullmatch(r'(\d+)_(.+Piece)',asset_id)
+                  links.append({'cache_id':asset_id,'item_id':int(match.group(1)) if match else None,'piece_name':match.group(2) if match else None,'swf_id':el.get('swf'),'linkage_class':(el.text or '').strip()})
+          for link in links:
+              link['swf_url']=swfs.get(link['swf_id'],{}).get('url')
+          payload={'statistics':{'swf_bundles':len(swfs),'asset_links':len(links),'wearable_item_piece_links':sum(x['item_id'] is not None for x in links)},'swfs':swfs,'asset_links':links}
+          Path('output/pixie_cacheable_media_item_map.json').write_text(json.dumps(payload,indent=2,ensure_ascii=False)+'\n')
+          print(payload['statistics'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-cacheable-media-item-map
+          path: output/pixie_cacheable_media_item_map.json
+          retention-days: 3
+          compression-level: 9
+      - name: Report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:context.issue.number,body:`PIXIE_CACHEABLE_MEDIA_MAP_RUN_ID=${context.runId} STATUS=${{ job.status }}`});
