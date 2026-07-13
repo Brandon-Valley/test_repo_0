@@ -1,0 +1,55 @@
+build	Build and enrich the complete JSON	﻿2026-07-13T23:55:27.4692187Z ##[group]Run set -euo pipefail
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4692555Z ^[[36;1mset -euo pipefail^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4693117Z ^[[36;1mpython work/extractor.py --xml-dir work/xml --source-root source --output output/pixie_hollow_wearable_placement_data.json^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4693701Z ^[[36;1mpython - <<'PY'^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4693927Z ^[[36;1mimport json^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4694150Z ^[[36;1mfrom pathlib import Path^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4694641Z ^[[36;1mpath=Path('output/pixie_hollow_wearable_placement_data.json'); data=json.loads(path.read_text())^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4695155Z ^[[36;1mcategory_slots={^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4695580Z ^[[36;1m  'chest':['ChestPiece'],'sleeve_left':['SleeveLeftPiece'],'sleeve_right':['SleeveRightPiece'],^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4696257Z ^[[36;1m  'sleeve_left_lower':['SleeveLeftLowerPiece'],'sleeve_right_lower':['SleeveRightLowerPiece'],^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4696964Z ^[[36;1m  'skirt_left':['SkirtLeftPiece','ShortsLeftPiece'],'skirt_right':['SkirtRightPiece','ShortsRightPiece'],^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4697769Z ^[[36;1m  'skirt':['SkirtLeftPiece','SkirtRightPiece'],'leg_left_upper':['PantLeftPiece','ShortsLeftPiece','SkirtLeftPiece'],^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4698568Z ^[[36;1m  'leg_right_upper':['PantRightPiece','ShortsRightPiece','SkirtRightPiece'],'leg_left_lower':['PantLeftPiece'],^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4699312Z ^[[36;1m  'leg_right_lower':['PantRightPiece'],'shoe':['ShoeLeftPiece','ShoeRightPiece'],'head':['HeadPiece'],^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4700038Z ^[[36;1m  'hair_front':['HairFrontPiece'],'hair_back':['HairBackPiece'],'wings':['WingsPiece'],'necklace':['NecklacePiece'],^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4701031Z ^[[36;1m  'waist':['WaistPiece'],'wrist':['WristPiece'],'ankle':['AnklePiece'],'face':['FacePiece'],'eyes':['EyesPiece']}^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4701688Z ^[[36;1mdata['category_to_slot_names']=category_slots^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4702016Z ^[[36;1mneutral=[]^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4702279Z ^[[36;1mfor pose_id,pose in data['poses'].items():^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4702744Z ^[[36;1m    if pose['pose_name'] in ('VectorModelContainer','MaleVectorModelContainer'):^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4703183Z ^[[36;1m        neutral.append((pose_id,pose))^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4703502Z ^[[36;1mfor symbol in data['wearable_symbols']:^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4704039Z ^[[36;1m    targets=category_slots.get(symbol['category'],[]); symbol['recommended_slot_names']=targets; placements=[]^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4704569Z ^[[36;1m    box=symbol.get('local_bounds')^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4705049Z ^[[36;1m    for pose_id,pose in neutral:^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4705332Z ^[[36;1m        for slot in pose['slots']:^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4705662Z ^[[36;1m            if slot['instance_name'] not in targets: continue^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4706565Z ^[[36;1m            placements.append({'pose_id':pose_id,'pose_name':pose['pose_name'],'slot_path':slot['path'],'slot_name':slot['instance_name'],'depth_path':slot['depth_path'],'world_matrix':slot['world_matrix'],'local_bounds':box})^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4707459Z ^[[36;1m    symbol['neutral_pose_placements']=placements^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4707796Z ^[[36;1mfor item in data['catalog_items']:^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4708082Z ^[[36;1m    for piece in item['pieces']:^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4708415Z ^[[36;1m        piece['target_slot_names']=[piece['piece_type']]^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4709519Z ^[[36;1mdata['_meta']['use_in_dress_up']='For a trimmed PNG, use origin_px_in_trimmed_image as its local registration point. Place that registration point at the chosen pose slot origin and apply the slot affine matrix. For different poses, look up the same slot name in poses.'^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4710676Z ^[[36;1mpath.write_text(json.dumps(data,indent=2,ensure_ascii=False)+'\n')^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4711540Z ^[[36;1mprint(json.dumps(data['statistics'],indent=2)); print('final bytes',path.stat().st_size)^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4711981Z ^[[36;1mPY^[[0m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4744260Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4744624Z env:
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4745096Z   JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1600m
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4745542Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.11-10/x64
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4746038Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.11-10/x64
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4746493Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.13/x64
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4746943Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.13/x64/lib/pkgconfig
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4747380Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.13/x64
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4747778Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.13/x64
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4748164Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.13/x64
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4748553Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.13/x64/lib
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4748891Z   FFDEC_JAR: tools/ffdec/ffdec.jar
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.4749137Z ##[endgroup]
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.5603926Z Traceback (most recent call last):
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.5612631Z   File "/home/runner/work/test_repo_0/test_repo_0/work/extractor.py", line 162, in <module>
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.5613436Z     for path in sorted(xml_dir.rglob('*.xml')):
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.5613913Z                        ^^^^^^^
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.5614315Z NameError: name 'xml_dir' is not defined
+build	Build and enrich the complete JSON	2026-07-13T23:55:27.5704200Z ##[error]Process completed with exit code 1.
