@@ -1,0 +1,72 @@
+name: Extract Pixie item name catalog
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  build:
+    if: contains(github.event.comment.body, 'launch pixie item name catalog')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Extract localized item names and descriptions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          python - <<'PY'
+          import json,re
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          records={}
+          for path in Path('source/xml').rglob('*.xml'):
+              try:root=ET.parse(path).getroot()
+              except:continue
+              for parent in root.iter():
+                  children=list(parent)
+                  if not children:continue
+                  desc={}
+                  for child in children:
+                      match=re.fullmatch(r'desc(\d+)',child.tag)
+                      if match:desc[int(match.group(1))]=(child.text or '').strip()
+                  for child in children:
+                      match=re.fullmatch(r'item(\d+)',child.tag)
+                      if not match:continue
+                      item_id=int(match.group(1));name=(child.text or '').strip()
+                      rec=records.setdefault(item_id,{'item_id':item_id,'names':[],'descriptions':[],'attributes':[],'source_xml_files':[]})
+                      if name and name not in rec['names']:rec['names'].append(name)
+                      description=desc.get(item_id,'')
+                      if description and description not in rec['descriptions']:rec['descriptions'].append(description)
+                      attrs=dict(child.attrib)
+                      if attrs and attrs not in rec['attributes']:rec['attributes'].append(attrs)
+                      rel=path.relative_to('source').as_posix()
+                      if rel not in rec['source_xml_files']:rec['source_xml_files'].append(rel)
+          out=sorted(records.values(),key=lambda x:x['item_id'])
+          Path('output/pixie_item_name_catalog.json').write_text(json.dumps({'statistics':{'localized_item_ids':len(out)},'items':out},indent=2,ensure_ascii=False)+'\n')
+          print('item ids',len(out))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-item-name-catalog
+          path: output/pixie_item_name_catalog.json
+          retention-days: 3
+          compression-level: 9
+      - name: Report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:context.issue.number,body:`PIXIE_ITEM_NAME_CATALOG_RUN_ID=${context.runId} STATUS=${{ job.status }}`});
