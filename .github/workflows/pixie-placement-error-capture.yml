@@ -14,17 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download failed job log and write tail
+      - name: Capture failed run log
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf /tmp/joblogs && mkdir -p /tmp/joblogs
-          gh api -H 'Accept: application/vnd.github+json' /repos/${{ github.repository }}/actions/jobs/86963880608/logs > /tmp/joblogs.zip
-          unzip -q /tmp/joblogs.zip -d /tmp/joblogs || true
-          { find /tmp/joblogs -type f -maxdepth 3 -print; grep -RniE 'Traceback|Error|Exception|failed|Killed|SyntaxError|IndentationError|NameError|KeyError|AttributeError|TypeError|JSON' /tmp/joblogs || true; } > status/pixie-placement-error.txt
-          tail -n 300 status/pixie-placement-error.txt > status/pixie-placement-error-tail.txt
+          mkdir -p status
+          gh run view 29294139145 --repo ${{ github.repository }} --log-failed > status/pixie-placement-error.txt 2>&1 || true
+          tail -n 400 status/pixie-placement-error.txt > status/pixie-placement-error-tail.txt
       - name: Commit error tail
         shell: bash
         run: |
@@ -33,4 +31,5 @@ jobs:
           git config user.email github-actions@github.com
           git add status/pixie-placement-error*.txt
           git commit -m 'Capture Pixie placement build error' || true
+          git pull --rebase || true
           git push
