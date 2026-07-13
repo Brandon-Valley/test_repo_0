@@ -1,0 +1,21 @@
+name: Report Pixie avatar placement probe status
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  issues: write
+
+jobs:
+  report:
+    if: contains(github.event.comment.body, 'report pixie avatar placement probe')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.rest.actions.listWorkflowRuns({owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'pixie-avatar-placement-probe.yml', per_page: 5});
+            const lines = runs.data.workflow_runs.map(r => `run=${r.id} status=${r.status} conclusion=${r.conclusion || 'none'} created=${r.created_at}`);
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: `PIXIE_AVATAR_PLACEMENT_PROBE_STATUS\n${lines.join('\n')}`});
