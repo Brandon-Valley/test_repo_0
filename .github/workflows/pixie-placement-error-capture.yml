@@ -21,7 +21,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p status
-          gh run view 29294139145 --repo ${{ github.repository }} --log-failed > status/pixie-placement-error.txt 2>&1 || true
+          gh run view 29294745736 --repo ${{ github.repository }} --log-failed > status/pixie-placement-error.txt 2>&1 || true
           tail -n 400 status/pixie-placement-error.txt > status/pixie-placement-error-tail.txt
       - name: Commit error tail
         shell: bash
