@@ -1,0 +1,220 @@
+name: Build complete Pixie wearable placement JSON v2
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+
+jobs:
+  build:
+    if: contains(github.event.comment.body, 'launch complete pixie wearable placement json v2')
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: toolsrepo
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          mkdir -p tools/ffdec work/xml work/logs output
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Select every exact wearable bundle and avatar skeleton bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,re
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          root=Path('source/swf')
+          files=list(root.rglob('*.swf'))
+          by_name={}
+          by_rel={}
+          for path in files:
+              by_name.setdefault(path.name.lower(),[]).append(path)
+              by_rel[path.relative_to(root).as_posix().lower()]=path
+          cache=ET.parse('source/xml/cacheableMedia.xml').getroot()
+          swfs={el.get('id'):(el.get('url') or '').strip() for el in cache.iter('swf') if el.get('id')}
+          wanted_urls=set()
+          for el in cache.iter('asset'):
+              if el.get('type')!='link' or not re.fullmatch(r'\d+_.+Piece',el.get('id') or ''):continue
+              url=swfs.get(el.get('swf'))
+              if url:wanted_urls.add(url)
+          selected=set()
+          missing=[]
+          for url in sorted(wanted_urls):
+              clean=url.replace('\\','/').lstrip('./')
+              candidates=[]
+              if clean.lower() in by_rel:candidates=[by_rel[clean.lower()]]
+              if not candidates:candidates=by_name.get(Path(clean).name.lower(),[])
+              if candidates:selected.add(sorted(candidates,key=lambda p:(len(p.as_posix()),p.as_posix()))[0])
+              else:missing.append(url)
+          extra=re.compile(r'(avatar(0[1-9]|10|base|collection|_sparrowmen)|hair|wings|sparrowmen|nevercouncilavatar|playmatesavatar|winteroutfit)',re.I)
+          for path in files:
+              if extra.search(path.name) and not re.search(r'(aura|effect|masquerade|clickable|decoration)',path.name,re.I):selected.add(path)
+          groups={}
+          for path in sorted(selected):
+              h=hashlib.sha256()
+              with path.open('rb') as stream:
+                  for block in iter(lambda:stream.read(1024*1024),b''):h.update(block)
+              groups.setdefault(h.hexdigest(),[]).append(path)
+          rows=[]
+          for digest,paths in sorted(groups.items()):
+              paths=sorted(paths,key=lambda p:(len(p.as_posix()),p.as_posix()));rows.append({'sha256':digest,'primary':paths[0].as_posix(),'all_paths':[p.as_posix() for p in paths]})
+          Path('work/candidates.json').write_text(json.dumps({'exact_wearable_urls':len(wanted_urls),'missing_urls':missing,'selected_paths':len(selected),'unique_swfs':len(rows),'rows':rows},indent=2)+'\n')
+          print('exact wearable URLs',len(wanted_urls),'selected paths',len(selected),'unique SWFs',len(rows),'missing',len(missing))
+          if missing:print('missing sample',missing[:30])
+          PY
+      - name: Convert selected SWFs to structural XML
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,subprocess
+          from concurrent.futures import ThreadPoolExecutor,as_completed
+          from pathlib import Path
+          rows=json.loads(Path('work/candidates.json').read_text())['rows']
+          jar=os.environ['FFDEC_JAR']
+          def one(row):
+              digest=row['sha256'];input=Path(row['primary']);output=Path('work/xml')/(digest+'.xml');source_file=output.with_suffix('.source.txt');source_file.write_text(input.relative_to('source').as_posix()+'\n')
+              log=Path('work/logs')/(digest+'.log')
+              try:
+                  with log.open('wb') as stream:
+                      result=subprocess.run(['java','-jar',jar,'-onerror','ignore','-swf2xml',str(input),str(output)],stdout=stream,stderr=subprocess.STDOUT,timeout=900)
+                  ok=output.exists() and output.stat().st_size>0
+                  if not ok:output.unlink(missing_ok=True)
+                  return digest,ok,result.returncode
+              except subprocess.TimeoutExpired:
+                  output.unlink(missing_ok=True);log.write_text(log.read_text(errors='ignore')+'\nTIMEOUT\n');return digest,False,124
+          successes=0
+          with ThreadPoolExecutor(max_workers=3) as pool:
+              futures=[pool.submit(one,row) for row in rows]
+              for index,future in enumerate(as_completed(futures),1):
+                  digest,ok,code=future.result();successes+=int(ok)
+                  if index%25==0 or not ok:print(index,'of',len(rows),'successes',successes,'last',digest[:10],ok,code,flush=True)
+          print('converted',successes,'of',len(rows))
+          PY
+          printf 'XML documents: '; find work/xml -type f -name '*.xml' | wc -l
+          du -sh work/xml
+      - name: Build placement geometry JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=toolsrepo/scripts python toolsrepo/scripts/pixie_wearable_placement_streaming.py --xml-dir work/xml --source-root source --output output/base_placement.json
+      - name: Build localized item-name and exact cache maps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,re
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          records={}
+          for path in Path('source/xml').rglob('*.xml'):
+              try:root=ET.parse(path).getroot()
+              except:continue
+              for parent in root.iter():
+                  children=list(parent)
+                  if not children:continue
+                  desc={}
+                  for child in children:
+                      m=re.fullmatch(r'desc(\d+)',child.tag)
+                      if m:desc[int(m.group(1))]=(child.text or '').strip()
+                  for child in children:
+                      m=re.fullmatch(r'item(\d+)',child.tag)
+                      if not m:continue
+                      item_id=int(m.group(1));name=(child.text or '').strip();rec=records.setdefault(item_id,{'item_id':item_id,'names':[],'descriptions':[],'attributes':[],'source_xml_files':[]})
+                      if name and name not in rec['names']:rec['names'].append(name)
+                      description=desc.get(item_id,'')
+                      if description and description not in rec['descriptions']:rec['descriptions'].append(description)
+                      attrs=dict(child.attrib)
+                      if attrs and attrs not in rec['attributes']:rec['attributes'].append(attrs)
+                      rel=path.relative_to('source').as_posix()
+                      if rel not in rec['source_xml_files']:rec['source_xml_files'].append(rel)
+          names=sorted(records.values(),key=lambda x:x['item_id'])
+          Path('output/item_names.json').write_text(json.dumps({'statistics':{'localized_item_ids':len(names)},'items':names},indent=2,ensure_ascii=False)+'\n')
+          cache_root=ET.parse('source/xml/cacheableMedia.xml').getroot();swfs={};links=[]
+          for el in cache_root.iter():
+              if el.tag=='swf' and el.get('id'):swfs[el.get('id')]={'swf_id':el.get('id'),'url':el.get('url')}
+              elif el.tag=='asset' and el.get('type')=='link' and el.get('id'):
+                  asset_id=el.get('id');match=re.fullmatch(r'(\d+)_(.+Piece)',asset_id);links.append({'cache_id':asset_id,'item_id':int(match.group(1)) if match else None,'piece_name':match.group(2) if match else None,'swf_id':el.get('swf'),'linkage_class':(el.text or '').strip()})
+          for link in links:link['swf_url']=swfs.get(link['swf_id'],{}).get('url')
+          cache={'statistics':{'swf_bundles':len(swfs),'asset_links':len(links),'wearable_item_piece_links':sum(x['item_id'] is not None for x in links)},'swfs':swfs,'asset_links':links}
+          Path('output/cache_map.json').write_text(json.dumps(cache,indent=2,ensure_ascii=False)+'\n')
+          print('localized item ids',len(names),'wearable item-piece links',cache['statistics']['wearable_item_piece_links'])
+          PY
+      - name: Merge exact item mapping, geometry, and pose matrices
+        shell: bash
+        run: |
+          set -euo pipefail
+          python toolsrepo/scripts/merge_pixie_wearable_data.py --placement output/base_placement.json --names output/item_names.json --cache-map output/cache_map.json --output output/pixie_hollow_complete_wearable_placement_data.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('output/pixie_hollow_complete_wearable_placement_data.json');d=json.loads(p.read_text())
+          d['_meta']['usage_summary']='For each item, read exact_piece_links. Resolve matched_symbol_ids to wearable_symbols for local bounds and registration origin. Apply the exact neutral_pose_slots world_matrix, or locate the same target_marker_name in another pose under poses.'
+          d['_meta']['source_files']=['xml/cacheableMedia.xml','xml/avatarAssets.xml','xml/items.xml','surviving wardrobe/avatar response XML','wearable/avatar SWF placement matrices and SymbolClass maps','AvatarItem.as and AvatarController.as extracted from framework SWFs']
+          p.write_text(json.dumps(d,indent=2,ensure_ascii=False)+'\n')
+          PY
+      - name: Validate final JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,hashlib
+          from pathlib import Path
+          p=Path('output/pixie_hollow_complete_wearable_placement_data.json');d=json.loads(p.read_text());s=d['statistics']
+          assert s['swf_xml_documents']>100,s
+          assert s['wearable_and_avatar_symbols']>1000,s
+          assert s['pose_definitions']>10,s
+          assert s['exact_runtime_item_piece_links']>5000,s
+          assert s['exact_runtime_item_ids']>2900,s
+          assert s['exact_link_matches_source_and_class']+s['exact_link_matches_class_only']>3000,s
+          assert len(d['items_by_id'])>5000
+          assert any(x.get('neutral_pose_slots') for x in d['exact_item_piece_links'])
+          digest=hashlib.sha256(p.read_bytes()).hexdigest();Path('output/pixie_hollow_complete_wearable_placement_data.sha256').write_text(digest+'  '+p.name+'\n')
+          print('VALID');print(json.dumps(s,indent=2));print('bytes',p.stat().st_size,'sha256',digest)
+          PY
+          rm -f output/base_placement.json output/item_names.json output/cache_map.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-hollow-complete-wearable-placement-json
+          path: output
+          retention-days: 3
+          compression-level: 9
+      - name: Report
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:context.issue.number,body:`PIXIE_WEARABLE_PLACEMENT_JSON_V2_RUN_ID=${context.runId} STATUS=${{ job.status }}`});
