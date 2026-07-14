@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pixie_wearable_placement_extractor as base
 
+ROUND = getattr(base, 'r', None) or getattr(base, 'rnd')
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -59,7 +61,7 @@ def main() -> None:
                 'display_list': display_list,
                 'named_layers': [x for x in display_list if x.get('name')],
                 'origin_px_in_trimmed_image': (
-                    {'x': base.r(-bounds[0] / 20), 'y': base.r(-bounds[1] / 20)}
+                    {'x': ROUND(-bounds[0] / 20), 'y': ROUND(-bounds[1] / 20)}
                     if bounds else None
                 ),
             }
