@@ -1,0 +1,229 @@
+name: Assemble Pixie Hollow houses and gardens library v2
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+  SOURCE_SHA: 5cd7f024ba7918f16975163e59a8320deb20dee3
+  SOURCE_SHORT: 5cd7f024
+  EXTRACTION_RUN_ID: 29707712212
+
+jobs:
+  assemble:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'run pixie houses gardens assemble v2')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout latest build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned current Pixie Hollow source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          fetch-depth: 1
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download successful manifest and extraction artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pixie-hg-*
+          path: downloaded
+          run-id: ${{ env.EXTRACTION_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install assembly tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pillow
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq rsync zip unzip ripgrep
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          test -n "$url"
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+
+      - name: Merge current-source subset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p merged/raw merged/metadata merged/loose_images evidence
+          cp -a downloaded/pixie-hg-manifest/. merged/metadata/
+          for shard in downloaded/pixie-hg-extracted-*; do
+            cp -a "$shard/raw/." merged/raw/
+            if [ -d "$shard/logs" ]; then
+              mkdir -p merged/metadata/extraction_logs
+              cp -a "$shard/logs/." merged/metadata/extraction_logs/
+            fi
+          done
+          while IFS= read -r rel; do
+            [ -f "source/$rel" ] || continue
+            mkdir -p "merged/loose_images/$(dirname "$rel")"
+            cp -a "source/$rel" "merged/loose_images/$rel"
+          done < merged/metadata/selected_loose_images.txt
+          test "$(cat merged/metadata/source_commit.txt)" = "$SOURCE_SHA"
+          du -sh merged
+
+      - name: Decompile exact resizing evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(swf/mmo.swf swf/panel_code/decoratePanel.swf swf/panel_code/homeViewer.swf)
+          for rel in "${files[@]}"; do
+            [ -f "source/$rel" ] || continue
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            mkdir -p "evidence/$safe"
+            timeout 600s java -jar "$FFDEC_JAR" -onerror ignore -export script "evidence/$safe" "source/$rel" >"evidence/${safe//\//_}.log" 2>&1 || true
+          done
+          rg -n -i 'MAX_SCALE|MIN_SCALE|SCALE_MULTIPLIER|roomScale|scaleX|scaleY' evidence > evidence/resize_rule_hits.txt || true
+          test -s evidence/resize_rule_hits.txt
+
+      - name: Assemble deduplicated image library
+        shell: bash
+        run: |
+          set -euo pipefail
+          library="Pixie_Hollow_Houses_and_Gardens_Image_Library_${SOURCE_SHORT}"
+          python builder/scripts/pixie_houses_gardens_assemble.py \
+            --source source --merged merged --output "$library" --evidence evidence
+          echo "LIBRARY=$library" >> "$GITHUB_ENV"
+
+      - name: Validate catalogs, resize rules, images, and duplicate removal
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from PIL import Image
+
+          lib = Path(os.environ['LIBRARY'])
+          summary = json.loads((lib/'00_metadata/library_summary.json').read_text())
+          rules = json.loads((lib/'00_metadata/decorating_scale_rules.json').read_text())
+          items = json.loads((lib/'00_metadata/item_size_limits.json').read_text())
+          dedupe = json.loads((lib/'00_metadata/deduplication_report.json').read_text())
+          scenes = json.loads((lib/'00_metadata/scene_variants.json').read_text())
+
+          assert summary['source_commit'] == os.environ['SOURCE_SHA'], summary
+          assert summary['home_catalog_items'] == 732, summary
+          assert summary['garden_catalog_items'] == 232, summary
+          assert summary['unique_images'] >= 500, summary
+          assert summary['scene_variants'] >= 20, summary
+          assert scenes, 'no scene variants'
+
+          rule = rules['home_placeable_item_rule']
+          assert rule['minimum_scale_fraction'] == 0.6
+          assert rule['maximum_scale_fraction'] == 1.5
+          assert rule['default_scale_fraction'] == 1.0
+          assert rule['minimum_percent'] == 60
+          assert rule['maximum_percent'] == 150
+          assert rule['default_percent'] == 100
+
+          home = [row for row in items.values() if row.get('catalog') == 'home']
+          garden = [row for row in items.values() if row.get('catalog') == 'garden']
+          assert len(home) == 732
+          assert len(garden) == 232
+          assert all(row['minimum_percent'] == 60 and row['maximum_percent'] == 150 for row in home)
+          assert all(row['resizable_in_decorating_mode'] is False for row in garden)
+          assert dedupe['unique_physical_image_visuals'] == summary['unique_images']
+
+          visual_hashes = {}
+          checked = 0
+          for path in sorted(lib.rglob('*')):
+              if not path.is_file() or path.suffix.lower() not in {'.png','.jpg','.jpeg','.gif','.webp','.bmp','.apng'}:
+                  continue
+              if '06_contact_sheets' in path.parts:
+                  continue
+              with Image.open(path) as image:
+                  image = image.convert('RGBA')
+                  if image.getbbox() is None:
+                      continue
+                  h = hashlib.sha256(f'{image.width}x{image.height}|RGBA|'.encode() + image.tobytes()).hexdigest()
+              if h in visual_hashes:
+                  raise AssertionError(f'duplicate physical visual: {path} duplicates {visual_hashes[h]}')
+              visual_hashes[h] = path.as_posix()
+              checked += 1
+
+          for scene in scenes:
+              canonical = lib / scene['complete_scene']
+              assert canonical.exists(), f'missing scene reference: {canonical}'
+
+          validation = {
+              'status': 'passed',
+              'source_commit': os.environ['SOURCE_SHA'],
+              'summary': summary,
+              'resize_rule': rule,
+              'deduplication': dedupe,
+              'validated_unique_physical_raster_visuals_excluding_contact_sheets': checked,
+              'scene_variant_records': len(scenes),
+              'all_scene_references_resolve': True,
+          }
+          (lib/'00_metadata/VALIDATION.json').write_text(json.dumps(validation, indent=2))
+          print(json.dumps(validation, indent=2))
+          PY
+
+      - name: Create and fully test final ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip_name="${LIBRARY}.zip"
+          zip -0 -q -r "$zip_name" "$LIBRARY"
+          unzip -tq "$zip_name"
+          sha=$(sha256sum "$zip_name" | awk '{print $1}')
+          bytes=$(stat -c '%s' "$zip_name")
+          printf '%s  %s\n' "$sha" "$zip_name" > "${zip_name}.sha256"
+          cp "$LIBRARY/00_metadata/library_summary.json" library_summary.json
+          cp "$LIBRARY/00_metadata/VALIDATION.json" VALIDATION.json
+          echo "ZIP_NAME=$zip_name" >> "$GITHUB_ENV"
+          echo "ZIP_SHA=$sha" >> "$GITHUB_ENV"
+          echo "ZIP_BYTES=$bytes" >> "$GITHUB_ENV"
+          echo "ZIP complete: $bytes bytes sha256=$sha"
+
+      - name: Upload one-download artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pixie_Hollow_Houses_and_Gardens_COMPLETE_${{ env.SOURCE_SHORT }}
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            library_summary.json
+            VALIDATION.json
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Report completed build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=$(jq -c . library_summary.json)
+          body=$(printf 'HOUSES_GARDENS_RUN_ID=%s\nSOURCE_COMMIT=%s\nARTIFACT_NAME=Pixie_Hollow_Houses_and_Gardens_COMPLETE_%s\nZIP_NAME=%s\nZIP_BYTES=%s\nZIP_SHA256=%s\nSUMMARY=%s' \
+            "$GITHUB_RUN_ID" "$SOURCE_SHA" "$SOURCE_SHORT" "$ZIP_NAME" "$ZIP_BYTES" "$ZIP_SHA" "$summary")
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments" -f body="$body" >/dev/null
