@@ -1,0 +1,45 @@
+name: Patch Pixie houses and gardens scene dedupe v1
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'patch pixie hg assembler dedupe scenes')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch scene visual deduplication
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/pixie_houses_gardens_assemble.py')
+          text = p.read_text()
+          old1 = "    scene_records = []\n"
+          new1 = "    scene_records = []\n    scene_visuals = {digest: record['canonical_path'] for digest, record in seen_visual.items()}\n"
+          if old1 not in text:
+              raise SystemExit('scene_records marker not found')
+          text = text.replace(old1, new1, 1)
+          old2 = '''            composite = variant_dir / 'complete_scene.png'\n            canvas.save(composite, compress_level=1)\n            scene_records.append({\n                'scene': scene_name,\n                'zone_id': zone_id,\n                'source_config': config_rel,\n                'variant': variant_name,\n                'event_tag': event_tag,\n                'complete_scene': composite.relative_to(out).as_posix(),\n                'layer_count': len(selected),\n                'usable_layer_count': len(usable),\n                'original_canvas_width': full_w,\n                'original_canvas_height': full_h,\n                'output_width': canvas.width,\n                'output_height': canvas.height,\n            })\n'''
+          new2 = '''            scene_hash = hashlib.sha256(f'{canvas.width}x{canvas.height}|RGBA|'.encode() + canvas.tobytes()).hexdigest()\n            duplicate_of = scene_visuals.get(scene_hash)\n            if duplicate_of:\n                complete_scene = duplicate_of\n                (variant_dir / 'complete_scene_reference.json').write_text(json.dumps({\n                    'visual_sha256': scene_hash,\n                    'canonical_image': complete_scene,\n                    'reason': 'Identical rendered pixels already exist; no duplicate image file was written.'\n                }, indent=2), encoding='utf-8')\n                duplicate_visual = True\n            else:\n                composite = variant_dir / 'complete_scene.png'\n                canvas.save(composite, compress_level=1)\n                complete_scene = composite.relative_to(out).as_posix()\n                scene_visuals[scene_hash] = complete_scene\n                duplicate_visual = False\n            scene_records.append({\n                'scene': scene_name,\n                'zone_id': zone_id,\n                'source_config': config_rel,\n                'variant': variant_name,\n                'event_tag': event_tag,\n                'complete_scene': complete_scene,\n                'visual_sha256': scene_hash,\n                'duplicate_visual_reference': duplicate_visual,\n                'layer_count': len(selected),\n                'usable_layer_count': len(usable),\n                'original_canvas_width': full_w,\n                'original_canvas_height': full_h,\n                'output_width': canvas.width,\n                'output_height': canvas.height,\n            })\n'''
+          if old2 not in text:
+              raise SystemExit('scene output block not found')
+          p.write_text(text.replace(old2, new2, 1))
+          PY
+          python -m py_compile scripts/pixie_houses_gardens_assemble.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pixie_houses_gardens_assemble.py
+          git commit -m 'Deduplicate identical houses and gardens scene composites'
+          git push
+      - name: Confirm patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments" -f body="HOUSES_GARDENS_SCENE_DEDUPE_PATCH=complete" >/dev/null
