@@ -258,7 +258,8 @@ def main() -> None:
     all_candidates = []
     for asset, row in asset_to_row.items():
         symbols = {}
-        for csv_path in asset.rglob('symbolClass.csv'):
+        symbol_files = list(asset.rglob('symbolClass.csv')) + list(asset.rglob('symbols.csv'))
+        for csv_path in sorted(set(symbol_files)):
             symbols.update(parse_symbol_csv(csv_path))
         source_rel = row['primary_source_path']
         files = []
