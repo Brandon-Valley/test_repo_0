@@ -14,13 +14,15 @@ jobs:
     if: github.event.issue.number == 5 && contains(github.event.comment.body, 'check pixie houses gardens library')
     runs-on: ubuntu-latest
     steps:
-      - name: Report latest workflow run
+      - name: Report newest non-skipped build run
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pixie-houses-gardens-library-v1.yml/runs?per_page=1" | jq '.workflow_runs[0]')
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pixie-houses-gardens-library-v1.yml/runs?per_page=20")
+          run=$(jq '[.workflow_runs[] | select(.conclusion != "skipped")] | .[0]' <<<"$runs")
+          test "$run" != "null"
           id=$(jq -r '.id' <<<"$run")
           status=$(jq -r '.status' <<<"$run")
           conclusion=$(jq -r '.conclusion // ""' <<<"$run")
