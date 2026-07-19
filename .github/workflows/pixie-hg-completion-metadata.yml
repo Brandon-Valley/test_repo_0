@@ -1,0 +1,48 @@
+name: Pixie HG completion metadata capture
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  capture:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'capture pixie hg completion metadata')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture completed build metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN: '29708300624'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p status
+          comments=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/5/comments?per_page=100")
+          body=$(jq -r --arg id "$TARGET_RUN" '[.[] | select(.body | startswith("HOUSES_GARDENS_RUN_ID=" + $id))] | last | .body' <<<"$comments")
+          test -n "$body" && test "$body" != "null"
+          BODY="$body" python - <<'PY'
+          import json, os
+          body = os.environ['BODY']
+          result = {}
+          for line in body.splitlines():
+              if '=' not in line:
+                  continue
+              key, value = line.split('=', 1)
+              if key == 'SUMMARY':
+                  result[key.lower()] = json.loads(value)
+              elif key == 'ZIP_BYTES':
+                  result[key.lower()] = int(value)
+              else:
+                  result[key.lower()] = value
+          open('status/pixie-hg-completion.json','w').write(json.dumps(result, indent=2))
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add status/pixie-hg-completion.json
+          git commit -m 'Capture completed Pixie houses and gardens build metadata'
+          git push
