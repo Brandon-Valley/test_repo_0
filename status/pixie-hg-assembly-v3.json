@@ -1,18 +1,89 @@
 {
-  "updated_at": "2026-07-19T23:41:27Z",
+  "updated_at": "2026-07-19T23:42:16Z",
   "run": {
-    "id": 29708323464,
+    "id": 29708300624,
     "status": "in_progress",
     "conclusion": null,
-    "html_url": "https://github.com/Brandon-Valley/test_repo_0/actions/runs/29708323464"
+    "html_url": "https://github.com/Brandon-Valley/test_repo_0/actions/runs/29708300624"
   },
   "jobs": [
     {
-      "id": 88248788651,
+      "id": 88248736947,
       "name": "assemble",
-      "status": "completed",
-      "conclusion": "skipped",
-      "steps": []
+      "status": "in_progress",
+      "conclusion": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout latest build scripts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout pinned current Pixie Hollow source",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-java@v4",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download successful extraction artifacts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install build tools",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build, validate, and package",
+          "status": "in_progress",
+          "conclusion": null
+        },
+        {
+          "name": "Upload one-download artifact",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Report completed build",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Run actions/setup-java@v4",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Checkout pinned current Pixie Hollow source",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Checkout latest build scripts",
+          "status": "pending",
+          "conclusion": null
+        }
+      ]
     }
   ]
 }
