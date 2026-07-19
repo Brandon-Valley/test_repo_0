@@ -1,0 +1,34 @@
+name: Pixie houses and gardens assembly status file
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  status:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'refresh pixie hg assembly status file')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write latest non-skipped assembly status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p status
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pixie-houses-gardens-assemble-v2.yml/runs?per_page=20")
+          run=$(jq '[.workflow_runs[] | select(.conclusion != "skipped")] | .[0]' <<<"$runs")
+          test "$run" != "null"
+          id=$(jq -r '.id' <<<"$run")
+          jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100")
+          jq -n --argjson run "$run" --argjson jobs "$jobs" '{updated_at:(now|todate),run:{id:$run.id,status:$run.status,conclusion:$run.conclusion,created_at:$run.created_at,updated_at:$run.updated_at,html_url:$run.html_url},jobs:[$jobs.jobs[]|{id,name,status,conclusion,started_at,completed_at,steps:[.steps[]?|{name,status,conclusion}]}]}' > status/pixie-hg-assembly-v2.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add status/pixie-hg-assembly-v2.json
+          git commit -m 'Refresh Pixie houses and gardens assembly status' || true
+          git push
