@@ -30,7 +30,7 @@ log("SOURCE=" + source)
 
 ext = os.path.splitext(source)[1].lower()
 if ext in (".gltf", ".glb"):
-    bpy.ops.import_scene.gltf(filepath=os.path.abspath(source), import_pack_images=True)
+    bpy.ops.import_scene.gltf(filepath=os.path.abspath(source))
 elif ext == ".fbx":
     bpy.ops.import_scene.fbx(filepath=os.path.abspath(source))
 elif ext == ".obj":
