@@ -1,0 +1,29 @@
+name: Pixie houses and gardens status v1
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  status:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'check pixie houses gardens library')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report latest workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pixie-houses-gardens-library-v1.yml/runs?per_page=1" | jq '.workflow_runs[0]')
+          id=$(jq -r '.id' <<<"$run")
+          status=$(jq -r '.status' <<<"$run")
+          conclusion=$(jq -r '.conclusion // ""' <<<"$run")
+          jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100" | jq -c '[.jobs[] | {name,status,conclusion,started_at,completed_at,steps:[.steps[]? | {name,status,conclusion}]}]')
+          body=$(printf 'HOUSES_GARDENS_STATUS_RUN_ID=%s\nSTATUS=%s\nCONCLUSION=%s\nJOBS=%s' "$id" "$status" "$conclusion" "$jobs")
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments" -f body="$body" >/dev/null
