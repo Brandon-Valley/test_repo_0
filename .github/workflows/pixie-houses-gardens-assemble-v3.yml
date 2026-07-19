@@ -1,0 +1,98 @@
+name: Assemble Pixie Hollow houses and gardens library v3
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+  SOURCE_SHA: 5cd7f024ba7918f16975163e59a8320deb20dee3
+  SOURCE_SHORT: 5cd7f024
+  EXTRACTION_RUN_ID: 29707712212
+
+jobs:
+  assemble:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'run pixie houses gardens assemble v3')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout latest build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned current Pixie Hollow source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          fetch-depth: 1
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download successful extraction artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pixie-hg-*
+          path: downloaded
+          run-id: ${{ env.EXTRACTION_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pillow
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq zip unzip ripgrep
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          test -n "$url"
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+
+      - name: Build, validate, and package
+        shell: bash
+        run: bash builder/scripts/pixie_houses_gardens_build_final.sh
+
+      - name: Upload one-download artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pixie_Hollow_Houses_and_Gardens_COMPLETE_${{ env.SOURCE_SHORT }}
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            library_summary.json
+            VALIDATION.json
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Report completed build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=$(jq -c . library_summary.json)
+          body=$(printf 'HOUSES_GARDENS_RUN_ID=%s\nSOURCE_COMMIT=%s\nARTIFACT_NAME=Pixie_Hollow_Houses_and_Gardens_COMPLETE_%s\nZIP_NAME=%s\nZIP_BYTES=%s\nZIP_SHA256=%s\nSUMMARY=%s' \
+            "$GITHUB_RUN_ID" "$SOURCE_SHA" "$SOURCE_SHORT" "$ZIP_NAME" "$ZIP_BYTES" "$ZIP_SHA" "$summary")
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments" -f body="$body" >/dev/null
