@@ -1,0 +1,157 @@
+name: Pixie houses and gardens discovery v1
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+
+jobs:
+  discover:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'run pixie houses gardens discovery')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout latest Pixie Hollow source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install discovery tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq ripgrep tree
+          mkdir -p tools/ffdec report/decompiled report/listings
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          test -n "$url"
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+
+      - name: Inventory source and search text metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          git rev-parse HEAD > ../report/source_commit.txt
+          git log -1 --format='%H%n%cI%n%s' > ../report/source_commit_details.txt
+          find . -type f | sort > ../report/all_source_files.txt
+          find . -type f \( -iname '*.swf' -o -iname '*.xml' -o -iname '*.json' \) \
+            | grep -Ei '(^|/)(home|homes|garden|gardens|decorate|decoration|decorations|furniture|storage|house|houses|item|items)' \
+            | sort > ../report/relevant_source_paths.txt || true
+          find meadows -maxdepth 3 -type f 2>/dev/null | grep -Ei '/(home|garden)' | sort > ../report/home_garden_meadow_files.txt || true
+          find swf -type f 2>/dev/null | grep -Ei '(home|garden|decorat|furniture|storage|item)' | sort > ../report/relevant_swf_paths.txt || true
+          rg -n -i --glob='*.xml' --glob='*.json' --glob='*.js' --glob='*.as' \
+            'min.?scale|max.?scale|scale.?min|scale.?max|minimum.?size|maximum.?size|resize|resiz|scaleX|scaleY|furniture|decoration|decorate|gardenAssets|homeAssets' \
+            . > ../report/text_search_hits.txt || true
+          cd ..
+
+      - name: Decompile decorating and related client code
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t candidates < <(find source -type f -iname '*.swf' | grep -Ei '/(mmo|decorate|storage|home|garden|furniture|item)[^/]*\.swf$|/(panel_code|panel_content)/[^/]*(decorate|storage|home|garden)[^/]*\.swf$' | sort -u)
+          printf '%s\n' "${candidates[@]}" > report/decompiled_candidates.txt
+          for swf in "${candidates[@]}"; do
+            rel=${swf#source/}
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            out="report/decompiled/$safe"
+            mkdir -p "$out"
+            timeout 300s java -jar "$FFDEC_JAR" -onerror ignore -export script "$out" "$swf" >"$out/ffdec.log" 2>&1 || true
+          done
+          rg -n -i 'min.?scale|max.?scale|scale.?min|scale.?max|minimum.?size|maximum.?size|scaleX|scaleY|resize|resiz|decorat|furniture|home item|garden item' \
+            report/decompiled > report/decompiled_scale_hits.txt || true
+
+      - name: Build structured catalog probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json, re, xml.etree.ElementTree as ET
+
+          src = Path('source')
+          out = Path('report')
+          data = {'home': {}, 'garden': {}, 'demo_scale_observations': [], 'price_data_hits': []}
+
+          def parse_copy(path, group):
+              root = ET.parse(path).getroot()
+              copy = root.find('copy')
+              names = {}
+              descs = {}
+              if copy is not None:
+                  for node in copy:
+                      m = re.fullmatch(r'item(\d+)', node.tag)
+                      if m:
+                          names[m.group(1)] = {'name': (node.text or '').strip(), 'attributes': dict(node.attrib)}
+                      m = re.fullmatch(r'desc(\d+)', node.tag)
+                      if m:
+                          descs[m.group(1)] = (node.text or '').strip()
+              for item_id, row in names.items():
+                  row['description'] = descs.get(item_id, '')
+              data[group]['items'] = names
+              data[group]['root_children'] = [child.tag for child in root]
+
+          parse_copy(src/'xml/homeAssets.xml', 'home')
+          parse_copy(src/'xml/gardenAssets.xml', 'garden')
+
+          for path in [src/'xml/demoResponses/FairiesDecorateResponse.xml', src/'xml/demoResponses/FairiesHomeResponse.xml', src/'xml/demoResponses/FairiesStorageResponse.xml']:
+              if path.exists():
+                  text = path.read_text(errors='ignore')
+                  for match in re.finditer(r'(?i)(?:scale|size)[^<>=]{0,20}[=:]\s*["\']?([0-9.]+)', text):
+                      data['demo_scale_observations'].append({'source': path.relative_to(src).as_posix(), 'match': match.group(0), 'value': match.group(1)})
+
+          price = src/'xml/priceData.xml'
+          if price.exists():
+              text = price.read_text(errors='ignore')
+              for item_id in list(data['home'].get('items', {}))[:]:
+                  if re.search(rf'(?<!\d){re.escape(item_id)}(?!\d)', text):
+                      data['price_data_hits'].append(item_id)
+
+          (out/'catalog_probe.json').write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+          (out/'catalog_counts.json').write_text(json.dumps({
+              'home_items': len(data['home'].get('items', {})),
+              'garden_items': len(data['garden'].get('items', {})),
+              'demo_scale_observations': len(data['demo_scale_observations'])
+          }, indent=2), encoding='utf-8')
+          PY
+
+      - name: Package and report
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tar -czf pixie-houses-gardens-discovery-v1.tar.gz report
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments" \
+            -f body="DISCOVERY_RUN_ID=${GITHUB_RUN_ID}%0ASOURCE_COMMIT=$(cat report/source_commit.txt)%0AArtifact: pixie-houses-gardens-discovery-v1" >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-houses-gardens-discovery-v1
+          path: pixie-houses-gardens-discovery-v1.tar.gz
+          compression-level: 0
+          retention-days: 3
