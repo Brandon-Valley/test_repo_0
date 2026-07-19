@@ -40,9 +40,17 @@ jobs:
       - name: Inspect model
         shell: bash
         run: |
-          set -euo pipefail
-          blender --background --python tools/summer_girl/inspect_model.py
+          set +e
+          blender --background --python tools/summer_girl/inspect_model.py > blender.log 2>&1
+          status=$?
+          if [ ! -f report.txt ]; then
+            cp blender.log report.txt
+          else
+            printf '\n\nBLENDER LOG\n' >> report.txt
+            cat blender.log >> report.txt
+          fi
           cat report.txt
+          exit $status
 
       - name: Upload inspection report
         if: always()
@@ -61,7 +69,7 @@ jobs:
             let report = 'No report was produced.';
             if (fs.existsSync('report.txt')) {
               report = fs.readFileSync('report.txt', 'utf8');
-              if (report.length > 58000) report = report.slice(0, 58000) + '\nTRUNCATED';
+              if (report.length > 58000) report = report.slice(-58000) + '\nTRUNCATED TO LAST 58000 CHARACTERS';
             }
             await github.rest.issues.createComment({
               owner: context.repo.owner,
