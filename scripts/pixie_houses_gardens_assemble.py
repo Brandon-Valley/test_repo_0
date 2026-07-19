@@ -587,15 +587,32 @@ def main() -> None:
     for path in item_dirs.values():
         path.mkdir(parents=True, exist_ok=True)
 
+    canonical_path_moves = {}
     for record in image_records:
         category = record['category']
-        source_path = out / record['canonical_path']
+        old_relative = record['canonical_path']
+        source_path = out / old_relative
         target_dir = item_dirs.get(category, item_dirs['technical'])
         target = target_dir / source_path.name
-        if target.exists():
-            continue
-        source_path.replace(target)
-        record['canonical_path'] = target.relative_to(out).as_posix()
+        if not target.exists():
+            source_path.replace(target)
+        new_relative = target.relative_to(out).as_posix()
+        canonical_path_moves[old_relative] = new_relative
+        record['canonical_path'] = new_relative
+
+    for scene in scene_records:
+        old_scene_path = scene.get('complete_scene', '')
+        if old_scene_path in canonical_path_moves:
+            scene['complete_scene'] = canonical_path_moves[old_scene_path]
+    for reference_path in scene_root.rglob('complete_scene_reference.json'):
+        try:
+            reference = json.loads(reference_path.read_text(encoding='utf-8'))
+            old_reference = reference.get('canonical_image', '')
+            if old_reference in canonical_path_moves:
+                reference['canonical_image'] = canonical_path_moves[old_reference]
+                reference_path.write_text(json.dumps(reference, indent=2), encoding='utf-8')
+        except Exception as exc:
+            fail(f'update scene reference {reference_path}', exc)
 
     for folder in [out / '02_furniture_and_decorations', out / '03_garden_plants_and_items', out / '04_home_models_and_base_items', out / '05_decorating_ui_and_tutorials', out / '07_loose_source_images']:
         for path in folder.rglob('*'):
