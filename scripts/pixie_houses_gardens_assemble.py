@@ -437,6 +437,7 @@ def main() -> None:
     scene_root = out / '01_backgrounds_and_scenes'
     scene_root.mkdir(parents=True, exist_ok=True)
     scene_records = []
+    scene_visuals = {digest: record['canonical_path'] for digest, record in seen_visual.items()}
     config_paths = [line.strip() for line in (manifest_dir / 'selected_scene_configs.txt').read_text().splitlines() if line.strip()]
     for config_rel in config_paths:
         config = source / config_rel
@@ -530,15 +531,31 @@ def main() -> None:
                         canvas.alpha_composite(im, (x, y))
                 except Exception as exc:
                     fail(f'compose scene layer {image_path}', exc)
-            composite = variant_dir / 'complete_scene.png'
-            canvas.save(composite, compress_level=1)
+            scene_hash = hashlib.sha256(f'{canvas.width}x{canvas.height}|RGBA|'.encode() + canvas.tobytes()).hexdigest()
+            duplicate_of = scene_visuals.get(scene_hash)
+            if duplicate_of:
+                complete_scene = duplicate_of
+                (variant_dir / 'complete_scene_reference.json').write_text(json.dumps({
+                    'visual_sha256': scene_hash,
+                    'canonical_image': complete_scene,
+                    'reason': 'Identical rendered pixels already exist; no duplicate image file was written.'
+                }, indent=2), encoding='utf-8')
+                duplicate_visual = True
+            else:
+                composite = variant_dir / 'complete_scene.png'
+                canvas.save(composite, compress_level=1)
+                complete_scene = composite.relative_to(out).as_posix()
+                scene_visuals[scene_hash] = complete_scene
+                duplicate_visual = False
             scene_records.append({
                 'scene': scene_name,
                 'zone_id': zone_id,
                 'source_config': config_rel,
                 'variant': variant_name,
                 'event_tag': event_tag,
-                'complete_scene': composite.relative_to(out).as_posix(),
+                'complete_scene': complete_scene,
+                'visual_sha256': scene_hash,
+                'duplicate_visual_reference': duplicate_visual,
                 'layer_count': len(selected),
                 'usable_layer_count': len(usable),
                 'original_canvas_width': full_w,
