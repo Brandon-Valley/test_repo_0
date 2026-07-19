@@ -1,0 +1,113 @@
+{
+  "updated_at": "2026-07-19T23:31:44Z",
+  "run": {
+    "id": 29707996814,
+    "status": "in_progress",
+    "conclusion": null,
+    "created_at": "2026-07-19T23:29:26Z",
+    "updated_at": "2026-07-19T23:29:30Z",
+    "html_url": "https://github.com/Brandon-Valley/test_repo_0/actions/runs/29707996814"
+  },
+  "jobs": [
+    {
+      "id": 88248033678,
+      "name": "assemble",
+      "status": "in_progress",
+      "conclusion": null,
+      "started_at": "2026-07-19T23:29:29Z",
+      "completed_at": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout latest build scripts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout pinned current Pixie Hollow source",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-java@v4",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download successful manifest and extraction artifacts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install assembly tools",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Merge current-source subset",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Decompile exact resizing evidence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Assemble deduplicated image library",
+          "status": "in_progress",
+          "conclusion": null
+        },
+        {
+          "name": "Validate catalogs, resize rules, images, and duplicate removal",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Create and fully test final ZIP",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Upload one-download artifact",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Report completed build",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Run actions/setup-java@v4",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Checkout pinned current Pixie Hollow source",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Checkout latest build scripts",
+          "status": "pending",
+          "conclusion": null
+        }
+      ]
+    }
+  ]
+}
