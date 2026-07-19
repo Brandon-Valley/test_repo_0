@@ -42,4 +42,4 @@ jobs:
       - name: Confirm patch
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number}/comments" -f body="HOUSES_GARDENS_CANONICAL_PATH_PATCH=complete" >/dev/null
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments" -f body="HOUSES_GARDENS_CANONICAL_PATH_PATCH=complete" >/dev/null
