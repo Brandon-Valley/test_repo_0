@@ -1,0 +1,35 @@
+{
+  "houses_gardens_run_id": "29708300624",
+  "source_commit": "5cd7f024ba7918f16975163e59a8320deb20dee3",
+  "artifact_name": "Pixie_Hollow_Houses_and_Gardens_COMPLETE_5cd7f024",
+  "zip_name": "Pixie_Hollow_Houses_and_Gardens_Image_Library_5cd7f024.zip",
+  "zip_bytes": 854832354,
+  "zip_sha256": "3ba42c1b5df92a926823ba36c395a31193035866a696041ecf91f95f73147a09",
+  "summary": {
+    "source_commit": "5cd7f024ba7918f16975163e59a8320deb20dee3",
+    "unique_selected_swfs": 287,
+    "home_catalog_items": 732,
+    "garden_catalog_items": 232,
+    "unique_images": 10924,
+    "reconstructed_rgba_images": 32,
+    "scene_variants": 13,
+    "catalog_symbol_matches": 298,
+    "image_bytes": 731740516,
+    "categories": {
+      "decorating_ui": 1936,
+      "decorations": 164,
+      "furniture": 96,
+      "furniture_decor_unmatched": 3858,
+      "garden_effects": 2118,
+      "garden_items_unmatched": 1285,
+      "home_effects": 704,
+      "home_models": 206,
+      "lamps": 29,
+      "loose_source_images": 29,
+      "scene_layers": 499
+    },
+    "resize_minimum_percent": 60,
+    "resize_maximum_percent": 150,
+    "resize_default_percent": 100
+  }
+}
