@@ -1,0 +1,397 @@
+name: Build Pixie Hollow houses and gardens library v1
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+
+jobs:
+  preflight:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'run pixie houses gardens library')
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      source_short: ${{ steps.source.outputs.short }}
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout newest Pixie Hollow source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Pin source and build selection manifest
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha=$(git -C source rev-parse HEAD)
+          short=${sha:0:8}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          mkdir -p manifest
+          python builder/scripts/pixie_houses_gardens_manifest.py --source source --output manifest
+          printf '%s\n' "$sha" > manifest/source_commit.txt
+          git -C source log -1 --format='%H%n%cI%n%s' > manifest/source_commit_details.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('manifest/selection_summary.json')
+          data = json.loads(p.read_text())
+          data['source_commit'] = Path('manifest/source_commit.txt').read_text().strip()
+          p.write_text(json.dumps(data, indent=2))
+          print(json.dumps(data, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-hg-manifest
+          path: manifest
+          compression-level: 6
+          retention-days: 3
+
+  extract:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'run pixie houses gardens library')
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned Pixie Hollow source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          path: source
+          fetch-depth: 1
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download selection manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-hg-manifest
+          path: manifest
+
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          test -n "$url"
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+
+      - name: Select this shard
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          python - <<'PY'
+          import csv, os
+          from pathlib import Path
+          source = Path('manifest/selected_swfs.tsv')
+          rows = list(csv.DictReader(source.open(encoding='utf-8'), delimiter='\t'))
+          shard = int(os.environ['SHARD'])
+          selected = [row for i, row in enumerate(rows) if i % 4 == shard]
+          with Path(f'manifest/shard_{shard}.tsv').open('w', newline='', encoding='utf-8') as f:
+              w = csv.DictWriter(f, rows[0].keys(), delimiter='\t')
+              w.writeheader()
+              w.writerows(selected)
+          print(f'shard={shard} selected={len(selected)} total={len(rows)}')
+          PY
+
+      - name: Extract selected SWFs
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          mkdir -p part/raw part/logs
+          tail -n +2 "manifest/shard_${SHARD}.tsv" | while IFS=$'\t' read -r digest rel bytes category categories mode duplicates; do
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            out="part/raw/${safe}__${digest:0:10}"
+            input="source/$rel"
+            mkdir -p "$out/fundamental" "$out/composites" "$out/context"
+            printf '%s\n' "$rel" > "$out/context/primary_source_path.txt"
+            printf '%s\n' "$digest" > "$out/context/sha256.txt"
+            printf '%s\n' "$category" > "$out/context/category.txt"
+            printf '%s\n' "$duplicates" > "$out/context/all_duplicate_paths.json"
+
+            timeout 480s java -jar "$FFDEC_JAR" -onerror ignore \
+              -format "image:png,shape:png,morphshape:png_start_end,button:png" \
+              -export "image,shape,morphshape,button,symbolClass" \
+              "$out/fundamental" "$input" \
+              >"part/logs/${digest:0:12}_fundamental.log" 2>&1 || true
+
+            timeout 180s java -jar "$FFDEC_JAR" -onerror ignore -ignorebackground \
+              -select "0:1" -format "frame:png" -export frame \
+              "$out/composites/root_tmp" "$input" \
+              >"part/logs/${digest:0:12}_root.log" 2>&1 || true
+            root_png=$(find "$out/composites/root_tmp" -type f -iname '*.png' 2>/dev/null | head -n 1 || true)
+            if [ -n "$root_png" ]; then cp "$root_png" "$out/composites/root_frame.png"; fi
+            rm -rf "$out/composites/root_tmp"
+
+            tmp="part/.sprites_${digest:0:12}"
+            timeout 900s java -jar "$FFDEC_JAR" -onerror ignore \
+              -format "sprite:png" -export sprite "$tmp" "$input" \
+              >"part/logs/${digest:0:12}_sprites.log" 2>&1 || true
+            if [ "$mode" = "all_frames" ]; then
+              if [ -d "$tmp" ]; then mkdir -p "$out/sprites"; cp -a "$tmp/." "$out/sprites/"; fi
+            else
+              python - "$tmp" "$out/sprites" <<'PY'
+          import shutil, sys
+          from pathlib import Path
+          src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+          if src.exists():
+              for folder in sorted(p for p in src.rglob('*') if p.is_dir()):
+                  images = sorted(folder.glob('*.png'), key=lambda p: (int(p.stem) if p.stem.isdigit() else 10**9, p.name))
+                  if images:
+                      target = dst / folder.relative_to(src)
+                      target.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(images[0], target / 'frame_001.png')
+          PY
+            fi
+            rm -rf "$tmp"
+            find "$out" -type d -empty -delete || true
+          done
+          find part/logs -type f -size 0 -delete || true
+          find part/logs -type f -exec grep -L -E 'FAIL|SEVERE|Exception|Error|Timed out' {} \; -delete || true
+          du -sh part
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-hg-extracted-${{ matrix.shard }}
+          path: part
+          compression-level: 6
+          retention-days: 3
+          if-no-files-found: error
+
+  assemble:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'run pixie houses gardens library')
+    needs: [preflight, extract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned Pixie Hollow source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          path: source
+          fetch-depth: 1
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download manifests and extraction shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pixie-hg-*
+          path: downloaded
+
+      - name: Install assembly tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pillow
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq rsync zip unzip
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+
+      - name: Merge current-source subset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p merged/raw merged/metadata merged/loose_images evidence
+          cp -a downloaded/pixie-hg-manifest/. merged/metadata/
+          for shard in downloaded/pixie-hg-extracted-*; do
+            cp -a "$shard/part/raw/." merged/raw/
+            if [ -d "$shard/part/logs" ]; then mkdir -p merged/metadata/extraction_logs; cp -a "$shard/part/logs/." merged/metadata/extraction_logs/; fi
+          done
+          while IFS= read -r rel; do
+            [ -f "source/$rel" ] || continue
+            mkdir -p "merged/loose_images/$(dirname "$rel")"
+            cp -a "source/$rel" "merged/loose_images/$rel"
+          done < merged/metadata/selected_loose_images.txt
+          du -sh merged
+
+      - name: Decompile resizing evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(swf/mmo.swf swf/panel_code/decoratePanel.swf swf/panel_code/homeViewer.swf)
+          for rel in "${files[@]}"; do
+            [ -f "source/$rel" ] || continue
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            mkdir -p "evidence/$safe"
+            timeout 600s java -jar "$FFDEC_JAR" -onerror ignore -export script "evidence/$safe" "source/$rel" >"evidence/${safe//\//_}.log" 2>&1 || true
+          done
+          rg -n -i 'MAX_SCALE|MIN_SCALE|SCALE_MULTIPLIER|roomScale|scaleX|scaleY' evidence > evidence/resize_rule_hits.txt || true
+
+      - name: Assemble deduplicated library
+        shell: bash
+        env:
+          SOURCE_SHORT: ${{ needs.preflight.outputs.source_short }}
+        run: |
+          set -euo pipefail
+          library="Pixie_Hollow_Houses_and_Gardens_Image_Library_${SOURCE_SHORT}"
+          python builder/scripts/pixie_houses_gardens_assemble.py \
+            --source source --merged merged --output "$library" --evidence evidence
+          echo "LIBRARY=$library" >> "$GITHUB_ENV"
+
+      - name: Validate output and size rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          lib = Path(os.environ['LIBRARY'])
+          summary = json.loads((lib/'00_metadata/library_summary.json').read_text())
+          rules = json.loads((lib/'00_metadata/decorating_scale_rules.json').read_text())
+          items = json.loads((lib/'00_metadata/item_size_limits.json').read_text())
+          dedupe = json.loads((lib/'00_metadata/deduplication_report.json').read_text())
+          assert summary['home_catalog_items'] >= 700, summary
+          assert summary['garden_catalog_items'] >= 200, summary
+          assert summary['unique_images'] >= 500, summary
+          assert summary['scene_variants'] >= 20, summary
+          rule = rules['home_placeable_item_rule']
+          assert rule['minimum_percent'] == 60
+          assert rule['maximum_percent'] == 150
+          assert rule['default_percent'] == 100
+          home = [x for x in items.values() if x.get('catalog') == 'home']
+          garden = [x for x in items.values() if x.get('catalog') == 'garden']
+          assert home and all(x['minimum_percent'] == 60 and x['maximum_percent'] == 150 for x in home)
+          assert garden and all(x['resizable_in_decorating_mode'] is False for x in garden)
+          assert dedupe['unique_physical_image_visuals'] == summary['unique_images']
+          visual = set()
+          for path in lib.rglob('*'):
+              if not path.is_file() or path.suffix.lower() not in {'.png','.jpg','.jpeg','.gif','.webp','.bmp','.apng'}:
+                  continue
+              if '06_contact_sheets' in path.parts or path.name == 'complete_scene.png':
+                  continue
+              from PIL import Image
+              try:
+                  with Image.open(path) as im:
+                      im = im.convert('RGBA')
+                      if im.getbbox() is None:
+                          continue
+                      h = hashlib.sha256(f'{im.width}x{im.height}|RGBA|'.encode() + im.tobytes()).hexdigest()
+              except Exception:
+                  continue
+              if h in visual:
+                  raise AssertionError(f'duplicate physical visual: {path}')
+              visual.add(h)
+          validation = {
+              'status': 'passed',
+              'summary': summary,
+              'resize_rule': rule,
+              'deduplication': dedupe,
+              'validated_unique_raster_visuals_excluding_composites_and_contact_sheets': len(visual),
+          }
+          (lib/'00_metadata/VALIDATION.json').write_text(json.dumps(validation, indent=2))
+          print(json.dumps(validation, indent=2))
+          PY
+
+      - name: Create and test final ZIP
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip_name="${LIBRARY}.zip"
+          zip -0 -q -r "$zip_name" "$LIBRARY"
+          unzip -tq "$zip_name"
+          sha=$(sha256sum "$zip_name" | awk '{print $1}')
+          bytes=$(stat -c '%s' "$zip_name")
+          printf '%s  %s\n' "$sha" "$zip_name" > "${zip_name}.sha256"
+          echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "bytes=$bytes" >> "$GITHUB_OUTPUT"
+          cp "$LIBRARY/00_metadata/library_summary.json" library_summary.json
+          cp "$LIBRARY/00_metadata/VALIDATION.json" VALIDATION.json
+          echo "ZIP_NAME=$zip_name" >> "$GITHUB_ENV"
+          echo "ZIP_SHA=$sha" >> "$GITHUB_ENV"
+          echo "ZIP_BYTES=$bytes" >> "$GITHUB_ENV"
+
+      - name: Upload one-download artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pixie_Hollow_Houses_and_Gardens_COMPLETE_${{ needs.preflight.outputs.source_short }}
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            library_summary.json
+            VALIDATION.json
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Report completed build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=$(jq -c . library_summary.json)
+          body=$(printf 'HOUSES_GARDENS_RUN_ID=%s\nSOURCE_COMMIT=%s\nARTIFACT_NAME=Pixie_Hollow_Houses_and_Gardens_COMPLETE_%s\nZIP_NAME=%s\nZIP_BYTES=%s\nZIP_SHA256=%s\nSUMMARY=%s' \
+            "$GITHUB_RUN_ID" "${{ needs.preflight.outputs.source_sha }}" "${{ needs.preflight.outputs.source_short }}" "$ZIP_NAME" "$ZIP_BYTES" "$ZIP_SHA" "$summary")
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments" -f body="$body" >/dev/null
