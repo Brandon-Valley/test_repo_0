@@ -1,0 +1,91 @@
+name: Pixie houses and gardens symbol probe v1
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+
+jobs:
+  probe:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'run pixie houses gardens symbol probe')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install FFDec
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+          mkdir -p tools/ffdec probe
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Export symbols and representative sprites
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            swf/home.swf
+            swf/gardenAssets.swf
+            swf/homeUpgradeAssets.swf
+            swf/items/gardens/ms23_gardens.swf
+            swf/ms8summerStorage001.swf
+            swf/winterStorage001.swf
+            swf/ms23_Storage_001_2013.swf
+            swf/ms23_Storage_April_May_03_2013.swf
+          )
+          for rel in "${files[@]}"; do
+            [ -f "source/$rel" ] || continue
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            out="probe/$safe"
+            mkdir -p "$out/symbols" "$out/scripts" "$out/sprites"
+            timeout 300s java -jar "$FFDEC_JAR" -onerror ignore -export symbolClass "$out/symbols" "source/$rel" >"$out/symbols.log" 2>&1 || true
+            timeout 300s java -jar "$FFDEC_JAR" -onerror ignore -export script "$out/scripts" "source/$rel" >"$out/scripts.log" 2>&1 || true
+            tmp="$out/all_sprite_frames"
+            timeout 600s java -jar "$FFDEC_JAR" -onerror ignore -format 'sprite:png' -export sprite "$tmp" "source/$rel" >"$out/sprites.log" 2>&1 || true
+            python - "$tmp" "$out/sprites" <<'PY'
+          import shutil, sys
+          from pathlib import Path
+          src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+          for folder in sorted(p for p in src.rglob('*') if p.is_dir()):
+              images = sorted(folder.glob('*.png'), key=lambda p: (int(p.stem) if p.stem.isdigit() else 10**9, p.name))
+              if images:
+                  target = dst / folder.relative_to(src)
+                  target.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(images[0], target / 'frame_001.png')
+          PY
+            rm -rf "$tmp"
+          done
+          git -C source rev-parse HEAD > probe/source_commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-houses-gardens-symbol-probe-v1
+          path: probe
+          compression-level: 6
+          retention-days: 3
+      - name: Comment run ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments" -f body="SYMBOL_PROBE_RUN_ID=${GITHUB_RUN_ID}" >/dev/null
