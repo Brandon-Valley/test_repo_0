@@ -1,0 +1,45 @@
+name: Patch Pixie houses and gardens canonical paths v2
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'patch pixie hg assembler canonical paths')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch canonical path remapping
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/pixie_houses_gardens_assemble.py')
+          text = p.read_text()
+          old1 = '''    for path in item_dirs.values():\n        path.mkdir(parents=True, exist_ok=True)\n\n    for record in image_records:\n'''
+          new1 = '''    for path in item_dirs.values():\n        path.mkdir(parents=True, exist_ok=True)\n\n    canonical_path_moves = {}\n    for record in image_records:\n'''
+          if old1 not in text:
+              raise SystemExit('item move preamble not found')
+          text = text.replace(old1, new1, 1)
+          old2 = '''        source_path = out / record['canonical_path']\n        target_dir = item_dirs.get(category, item_dirs['technical'])\n        target = target_dir / source_path.name\n        if target.exists():\n            continue\n        source_path.replace(target)\n        record['canonical_path'] = target.relative_to(out).as_posix()\n\n    for folder in [out / '02_furniture_and_decorations', out / '03_garden_plants_and_items', out / '04_home_models_and_base_items', out / '05_decorating_ui_and_tutorials', out / '07_loose_source_images']:\n'''
+          new2 = '''        old_relative = record['canonical_path']\n        source_path = out / old_relative\n        target_dir = item_dirs.get(category, item_dirs['technical'])\n        target = target_dir / source_path.name\n        if not target.exists():\n            source_path.replace(target)\n        new_relative = target.relative_to(out).as_posix()\n        canonical_path_moves[old_relative] = new_relative\n        record['canonical_path'] = new_relative\n\n    for scene in scene_records:\n        old_scene_path = scene.get('complete_scene', '')\n        if old_scene_path in canonical_path_moves:\n            scene['complete_scene'] = canonical_path_moves[old_scene_path]\n    for reference_path in scene_root.rglob('complete_scene_reference.json'):\n        try:\n            reference = json.loads(reference_path.read_text(encoding='utf-8'))\n            old_reference = reference.get('canonical_image', '')\n            if old_reference in canonical_path_moves:\n                reference['canonical_image'] = canonical_path_moves[old_reference]\n                reference_path.write_text(json.dumps(reference, indent=2), encoding='utf-8')\n        except Exception as exc:\n            fail(f'update scene reference {reference_path}', exc)\n\n    for folder in [out / '02_furniture_and_decorations', out / '03_garden_plants_and_items', out / '04_home_models_and_base_items', out / '05_decorating_ui_and_tutorials', out / '07_loose_source_images']:\n'''
+          if old2 not in text:
+              raise SystemExit('item move block not found')
+          p.write_text(text.replace(old2, new2, 1))
+          PY
+          python -m py_compile scripts/pixie_houses_gardens_assemble.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pixie_houses_gardens_assemble.py
+          git commit -m 'Remap deduplicated scene references after image organization'
+          git push
+      - name: Confirm patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number}/comments" -f body="HOUSES_GARDENS_CANONICAL_PATH_PATCH=complete" >/dev/null
