@@ -1,0 +1,36 @@
+name: Pixie houses and gardens validation error capture
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  capture:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'capture pixie hg validation error')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture failed job log tail
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p status tmp_logs
+          gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/88248033678/logs" > tmp_logs/job_logs.zip
+          unzip -p tmp_logs/job_logs.zip > tmp_logs/job.log
+          {
+            echo '--- MATCHED ERROR LINES ---'
+            grep -n -E 'AssertionError|Traceback|duplicate physical visual|assert |Error:|FAILED|failure' tmp_logs/job.log | tail -n 100 || true
+            echo '--- FINAL 250 LINES ---'
+            tail -n 250 tmp_logs/job.log
+          } > status/pixie-hg-validation-error.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add status/pixie-hg-validation-error.txt
+          git commit -m 'Capture Pixie houses and gardens validation failure'
+          git push
