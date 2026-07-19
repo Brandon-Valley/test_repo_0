@@ -1,0 +1,51 @@
+name: Summer Girl Source Export
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  export:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.comment.body, 'run summer girl source export')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download source model
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf model model.zip
+          mkdir -p model
+          curl --fail --location --retry 5 --retry-delay 3 \
+            --output model.zip \
+            https://mirror.traines.eu/sketchfab-backup/61/619cfd5b08ca46589ed3ad9f6154179f.zip
+          unzip -q model.zip -d model
+          find model -type f -printf '%s %p\n'
+
+      - name: Upload source model
+        uses: actions/upload-artifact@v4
+        with:
+          name: summer-girl-source-model
+          path: model
+          retention-days: 3
+          compression-level: 0
+
+      - name: Report result
+        if: always() && github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `SUMMER_GIRL_SOURCE_RUN_ID=${context.runId}\nSUMMER_GIRL_SOURCE_STATUS=${{ job.status }}`
+            });
