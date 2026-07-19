@@ -1,0 +1,34 @@
+name: Pixie HG assembly v3 status file
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  status:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'refresh pixie hg assembly v3 status')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write latest v3 assembly status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p status
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pixie-houses-gardens-assemble-v3.yml/runs?per_page=20")
+          run=$(jq '[.workflow_runs[] | select(.conclusion != "skipped")] | .[0]' <<<"$runs")
+          test "$run" != "null"
+          id=$(jq -r '.id' <<<"$run")
+          jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100")
+          jq -n --argjson run "$run" --argjson jobs "$jobs" '{updated_at:(now|todate),run:{id:$run.id,status:$run.status,conclusion:$run.conclusion,html_url:$run.html_url},jobs:[$jobs.jobs[]|{id,name,status,conclusion,steps:[.steps[]?|{name,status,conclusion}]}]}' > status/pixie-hg-assembly-v3.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add status/pixie-hg-assembly-v3.json
+          git commit -m 'Refresh Pixie HG v3 assembly status' || true
+          git push
