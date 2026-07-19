@@ -1,0 +1,33 @@
+name: Pixie HG validation capture status
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  status:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'refresh pixie hg capture status')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write capture workflow status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p status
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pixie-hg-validation-error-capture.yml/runs?per_page=10")
+          run=$(jq '[.workflow_runs[] | select(.conclusion != "skipped")] | .[0]' <<<"$runs")
+          id=$(jq -r '.id' <<<"$run")
+          jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100")
+          jq -n --argjson run "$run" --argjson jobs "$jobs" '{run:{id:$run.id,status:$run.status,conclusion:$run.conclusion},jobs:[$jobs.jobs[]|{id,name,status,conclusion,steps:[.steps[]?|{name,status,conclusion}]}]}' > status/pixie-hg-capture-status.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add status/pixie-hg-capture-status.json
+          git commit -m 'Refresh Pixie HG validation capture status'
+          git push
