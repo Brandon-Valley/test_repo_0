@@ -1,0 +1,321 @@
+name: Assemble Pixie dye companion v2
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+env:
+  GRAPH_RUN_ID: '29867712473'
+  ORIGINAL_LIBRARY_RUN_ID: '29708300624'
+  ORIGINAL_LIBRARY_ARTIFACT: Pixie_Hollow_Houses_and_Gardens_COMPLETE_5cd7f024
+  WEB_SHA: 5cd7f024ba7918f16975163e59a8320deb20dee3
+  SERVER_SHA: 2a4a5fb504c4be4357781cc6215665aea38e278f
+
+jobs:
+  assemble:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'assemble pixie dye companion v2')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout latest build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned web source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: ${{ env.WEB_SHA }}
+          path: web
+          fetch-depth: 1
+          lfs: true
+
+      - name: Checkout pinned game server
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/game-server
+          ref: ${{ env.SERVER_SHA }}
+          path: server
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download successful graph artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pixie-dye-graphs-*
+          path: downloaded_graphs
+          repository: Brandon-Valley/test_repo_0
+          run-id: ${{ env.GRAPH_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Download successful manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-dye-companion-manifest
+          path: manifest
+          repository: Brandon-Valley/test_repo_0
+          run-id: ${{ env.GRAPH_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Download existing complete houses/gardens library
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ORIGINAL_LIBRARY_ARTIFACT }}
+          path: original_library_artifact
+          repository: Brandon-Valley/test_repo_0
+          run-id: ${{ env.ORIGINAL_LIBRARY_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Download broad source research
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-dye-composition-research
+          path: evidence/broad
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29864509629'
+          github-token: ${{ github.token }}
+
+      - name: Download targeted dye research
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-targeted-dye-research
+          path: evidence/targeted
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29864784989'
+          github-token: ${{ github.token }}
+
+      - name: Download dye panel evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-dye-panel-only
+          path: evidence/dye_panel
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29864923178'
+          github-token: ${{ github.token }}
+
+      - name: Download MMO core evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-mmo-core-decompile
+          path: evidence/mmo_core
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29865338060'
+          github-token: ${{ github.token }}
+
+      - name: Download framework core evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-framework-dye-core
+          path: evidence/framework_core
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29866053362'
+          github-token: ${{ github.token }}
+
+      - name: Download exact shared DyeBottle source
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-gather-common-dye-bottle
+          path: evidence/gather_common_bottle
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29866336491'
+          github-token: ${{ github.token }}
+
+      - name: Install assembly packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pillow
+          python -m py_compile \
+            builder/scripts/pixie_swf_display_graph.py \
+            builder/scripts/pixie_prepare_dye_bottle.py \
+            builder/scripts/pixie_dye_companion_build.py \
+            builder/scripts/pixie_expand_exported_symbols.py
+
+      - name: Merge graphs and discover unpacked library root
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p graphs library_unpacked
+          find downloaded_graphs -type f -path '*/graphs/*.json' -print0 | while IFS= read -r -d '' f; do
+            rel=${f#*/graphs/}
+            mkdir -p "graphs/$(dirname "$rel")"
+            cp "$f" "graphs/$rel"
+          done
+          graph_count=$(find graphs -type f -name '*.json' | wc -l)
+          selected_count=$(($(wc -l < manifest/selected_swfs.tsv)-1))
+          echo "graphs=$graph_count selected=$selected_count"
+          test "$graph_count" -eq "$selected_count"
+
+          inner_zip=$(find original_library_artifact -type f -name '*.zip' | head -n 1 || true)
+          test -n "$inner_zip"
+          unzip -q "$inner_zip" -d library_unpacked
+          index=$(find library_unpacked -type f -path '*/00_metadata/image_index.json' | head -n 1 || true)
+          if [ -z "$index" ]; then
+            echo 'No image_index.json found. Unpacked tree:' >&2
+            find library_unpacked -maxdepth 4 -print >&2
+            exit 1
+          fi
+          library_root=$(dirname "$(dirname "$index")")
+          printf '%s\n' "$library_root" > library_root_path.txt
+          echo "library_root=$library_root"
+          test -f "$library_root/00_metadata/item_size_limits.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(Path('library_root_path.txt').read_text().strip())
+          images=json.loads((root/'00_metadata/image_index.json').read_text())
+          assert len(images)==10924, len(images)
+          source_files=list((root/'00_metadata').glob('*source*commit*.json'))
+          if source_files:
+              text=source_files[0].read_text()
+              assert os.environ['WEB_SHA'] in text, source_files[0]
+          print('library images',len(images))
+          PY
+
+      - name: Prepare exact DyeBottle base and named color1 mask
+        shell: bash
+        env:
+          PYTHONPATH: builder/scripts
+        run: |
+          set -euo pipefail
+          python builder/scripts/pixie_prepare_dye_bottle.py \
+            --evidence evidence/gather_common_bottle \
+            --output prepared_bottle
+          test -s prepared_bottle/dye_bottle_base.png
+          test -s prepared_bottle/dye_bottle_color1_mask.png
+          test -s prepared_bottle/dye_bottle_mapping.json
+
+      - name: Build mappings, dye assets, documentation, and browser
+        shell: bash
+        env:
+          PYTHONPATH: builder/scripts
+        run: |
+          set -euo pipefail
+          library_root=$(cat library_root_path.txt)
+          mkdir -p patch
+          python builder/scripts/pixie_dye_companion_build.py \
+            --source web \
+            --library "$library_root" \
+            --graphs graphs \
+            --output patch \
+            --web-commit "$WEB_SHA" \
+            --server-commit "$SERVER_SHA" \
+            --evidence evidence \
+            --exact-bottle-assets prepared_bottle
+          python builder/scripts/pixie_expand_exported_symbols.py \
+            --source web \
+            --library "$library_root" \
+            --graphs graphs \
+            --output patch
+          mkdir -p patch/10_dye_and_composition/source_evidence/exact_dye_bottle
+          cp -a prepared_bottle/. patch/10_dye_and_composition/source_evidence/exact_dye_bottle/
+
+      - name: Validate complete companion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from PIL import Image
+
+          root=Path('patch')
+          config=root/'10_dye_and_composition/config'
+          summary=json.loads((root/'10_dye_and_composition/BUILD_SUMMARY.json').read_text())
+          dyes=json.loads((config/'dyes.json').read_text())
+          parent=json.loads((config/'image_parent_map.json').read_text())
+          unmatched=json.loads((config/'unmatched_resolution.json').read_text())
+          objects=json.loads((config/'object_component_map.json').read_text())
+          items=json.loads((config/'item_component_map.json').read_text())
+          symbols=json.loads((config/'symbol_component_map.json').read_text())
+          slots=json.loads((config/'item_dye_slots.json').read_text())
+          rows=json.loads((config/'browser_rows.json').read_text())
+          browser=(root/'09_browse_library.html').read_text(encoding='utf-8')
+
+          assert len(dyes)==291, len(dyes)
+          pepper=next(x for x in dyes if x['name']=='Pepper Black')
+          assert pepper['color_id']==55 and pepper['rgb']==[41,42,63] and pepper['hex']=='#292A3F', pepper
+          assert len(parent)==10924, len(parent)
+          assert len(rows)==10924, len(rows)
+          assert len(objects)>=len(items)>0, (len(objects),len(items))
+          assert len(symbols)>0
+          assert len(unmatched)>0
+          assert len(slots)>0
+          assert summary['bottle_report']['method']=='exact_shared_DyeBottle_symbol_named_color1_mask', summary['bottle_report']
+          assert summary['maximum_dye_channels_in_client']==2
+          assert summary['swf_graphs']==287
+          assert any(mapping.get('dye_slot_count',0)==2 for mapping in objects.values())
+          assert any(mapping.get('dye_slot_count',0)==1 for mapping in objects.values())
+          assert any(row.get('mapping_role')=='complete_exported_symbol_without_catalog_match' for row in rows)
+          assert 'id="chars"' in browser and 'id="charMode"' in browser
+          assert 'id="dyeSlots"' in browser and 'id="viewer"' in browser
+          assert 'itemComponents[row.mapping_key]' in browser
+          assert 'Size range:' in browser and 'ondragstart' in browser and 'ondrop' in browser
+
+          for dye in dyes:
+              path=root/dye['bottle_image']
+              assert path.exists() and path.stat().st_size>0, path
+          for key,mapping in objects.items():
+              for path in mapping.get('dye_slot_masks',{}).values():
+                  file=root/path
+                  assert file.exists() and file.stat().st_size>0, (key,file)
+          base=Image.open(root/'10_dye_and_composition/assets/dye_bottle_base.png')
+          mask=Image.open(root/'10_dye_and_composition/assets/dye_bottle_color1_mask.png')
+          assert base.size==mask.size and mask.getbbox() is not None
+          print(json.dumps({
+              'summary':summary,
+              'objects':len(objects),
+              'catalog_items':len(items),
+              'additional_symbols':len(symbols),
+              'unmatched_classified':len(unmatched),
+              'browser_bytes':(root/'09_browse_library.html').stat().st_size,
+          },indent=2))
+          PY
+
+      - name: Create and test final companion ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip_name=Pixie_Hollow_Dye_and_Composition_Companion_5cd7f024.zip
+          (cd patch && zip -q -r -6 "../$zip_name" .)
+          unzip -t "$zip_name" >/dev/null
+          sha256sum "$zip_name" > companion_sha256.txt
+          stat -c%s "$zip_name" > companion_size.txt
+          du -h "$zip_name"
+
+      - name: Upload complete companion
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pixie_Hollow_Dye_and_Composition_Companion_5cd7f024
+          path: |
+            Pixie_Hollow_Dye_and_Composition_Companion_5cd7f024.zip
+            companion_sha256.txt
+            companion_size.txt
+            patch/09_browse_library.html
+            patch/10_dye_and_composition/DYE_SYSTEM.md
+            patch/10_dye_and_composition/COMPOSITION_AND_DOUBLE_UNDERSCORES.md
+            patch/10_dye_and_composition/UNMATCHED_EXPLAINED.md
+            patch/10_dye_and_composition/README.md
+            patch/10_dye_and_composition/BUILD_SUMMARY.json
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Report completed build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=$(jq -c . patch/10_dye_and_composition/BUILD_SUMMARY.json)
+          body=$(printf 'DYE_COMPANION_V2_RUN_ID=%s\nWEB_COMMIT=%s\nSERVER_COMMIT=%s\nARTIFACT=Pixie_Hollow_Dye_and_Composition_Companion_5cd7f024\nZIP_BYTES=%s\nZIP_SHA256=%s\nSUMMARY=%s' "$GITHUB_RUN_ID" "$WEB_SHA" "$SERVER_SHA" "$(cat companion_size.txt)" "$(cut -d' ' -f1 companion_sha256.txt)" "$summary")
+          gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="$body" >/dev/null
