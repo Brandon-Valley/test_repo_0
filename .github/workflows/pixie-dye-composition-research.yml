@@ -1,0 +1,194 @@
+name: Pixie dye and composition research
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+
+jobs:
+  research:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'run pixie dye research')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout helper repository
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout current web source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: web
+          fetch-depth: 1
+          lfs: true
+
+      - name: Checkout current game server
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/game-server
+          ref: main
+          path: server
+          fetch-depth: 1
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet lxml pillow
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq ripgrep unzip
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          test -n "$url"
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+
+      - name: Collect source evidence and decompile relevant clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p research/source_xml research/search research/decompiled research/manifests research/assets
+          web_sha=$(git -C web rev-parse HEAD)
+          server_sha=$(git -C server rev-parse HEAD)
+          jq -n --arg web "$web_sha" --arg server "$server_sha" '{web_commit:$web,game_server_commit:$server}' > research/source_shas.json
+
+          for f in \
+            xml/colorAssets.xml \
+            xml/items.xml \
+            xml/homeAssets.xml \
+            xml/gardenAssets.xml \
+            xml/panels/dyePanel.xml \
+            xml/panels/shopTopicSelector.xml; do
+            if [ -f "web/$f" ]; then mkdir -p "research/source_xml/$(dirname "$f")"; cp "web/$f" "research/source_xml/$f"; fi
+          done
+
+          rg -n -i --hidden --glob '!*.swf' --glob '!*.png' --glob '!*.jpg' --glob '!*.gif' \
+            'dye|dyeable|color_id|colorid|color slot|colorslot|original color|locked color|forceTwoColorModeIds|Pepper Black' \
+            web server > research/search/all_dye_references.txt || true
+          rg -l -i --hidden --glob '!*.swf' --glob '!*.png' --glob '!*.jpg' --glob '!*.gif' \
+            'dye|dyeable|color_id|colorid|colorslot|forceTwoColorModeIds' \
+            web server | sort > research/search/files_with_dye_references.txt || true
+
+          find web -type f -iname '*.swf' -printf '%s\t%p\n' | sort -n > research/manifests/all_swfs.tsv
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          rows=[]
+          for line in Path('research/manifests/all_swfs.tsv').read_text().splitlines():
+              size_s,path=line.split('\t',1)
+              low=path.lower()
+              score=0
+              for term,weight in {
+                  'dye':100,'color':90,'palette':80,'bottle':75,'wardrobe':65,
+                  'storage':65,'inventory':60,'avatar':55,'outfit':55,'clothing':55,
+                  'item':45,'home':40,'shop':30,'panel':15
+              }.items():
+                  if term in low: score += weight
+              if low.endswith('/swf/panel_code/dyepanel.swf') or low.endswith('/swf/panel_content/dyepanel.swf'):
+                  score += 1000
+              if score and int(size_s) <= 35_000_000:
+                  rows.append((score,int(size_s),path))
+          rows.sort(key=lambda x:(-x[0],x[1],x[2]))
+          selected=rows[:220]
+          Path('research/manifests/selected_swfs.tsv').write_text(
+              'score\tbytes\tpath\n' + '\n'.join(f'{s}\t{b}\t{p}' for s,b,p in selected) + '\n'
+          )
+          print('selected',len(selected))
+          PY
+
+          tail -n +2 research/manifests/selected_swfs.tsv | while IFS=$'\t' read -r score bytes swf; do
+            rel=${swf#web/}
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            out="research/decompiled/${safe}"
+            mkdir -p "$out"
+            printf '%s\n' "$rel" > "$out/source_path.txt"
+            timeout 300s java -jar "$FFDEC_JAR" -onerror ignore -export script,symbolClass "$out/export" "$swf" > "$out/export.log" 2>&1 || true
+            timeout 180s java -jar "$FFDEC_JAR" -onerror ignore -dumpSWF "$swf" > "$out/swf_dump.txt" 2> "$out/swf_dump.err" || true
+            find "$out" -type f -size 0 -delete || true
+          done
+
+          find web -type f \( -iname '*dye*.png' -o -iname '*dye*.jpg' -o -iname '*dye*.gif' -o -iname '*bottle*.png' -o -iname '*color*.png' \) -print0 | while IFS= read -r -d '' f; do
+            rel=${f#web/}; mkdir -p "research/assets/$(dirname "$rel")"; cp "$f" "research/assets/$rel";
+          done
+
+          python - <<'PY'
+          from pathlib import Path
+          import json, re, xml.etree.ElementTree as ET
+          root=Path('research')
+          colors=[]
+          p=root/'source_xml/xml/colorAssets.xml'
+          if p.exists():
+              for e in ET.parse(p).getroot().findall('.//color'):
+                  vals=[int(x) for x in (e.text or '').split()[:3]]
+                  if len(vals)==3:
+                      colors.append({
+                          'color_id':int(e.attrib.get('color_id','0')),
+                          'name':e.attrib.get('color_name',''),
+                          'description':e.attrib.get('color_desc',''),
+                          'tags':[x.strip() for x in e.attrib.get('color_tags','').split(',') if x.strip()],
+                          'rgb':vals,
+                          'hex':'#%02X%02X%02X'%tuple(vals),
+                      })
+          catalogs={}
+          for name in ['items','homeAssets','gardenAssets']:
+              fp=root/f'source_xml/xml/{name}.xml'
+              counts={}
+              dye=[]
+              if fp.exists():
+                  tree=ET.parse(fp)
+                  for e in tree.iter():
+                      if 'dyeable' in e.attrib:
+                          dye.append({'tag':e.tag,'dyeable':e.attrib['dyeable'],'attributes':e.attrib,'text':(e.text or '').strip()})
+                  counts={'elements':sum(1 for _ in tree.iter()),'with_dyeable':len(dye)}
+              catalogs[name]={'counts':counts,'dyeable_examples':dye[:100]}
+          scripts=list(root.glob('decompiled/**/scripts/**/*.as'))+list(root.glob('decompiled/**/*.as'))
+          report={
+              'colors':{'count':len(colors),'pepper_black':next((x for x in colors if x['name']=='Pepper Black'),None)},
+              'catalogs':catalogs,
+              'decompiled_actionscript_files':len(set(scripts)),
+              'selected_swfs':max(0,len((root/'manifests/selected_swfs.tsv').read_text().splitlines())-1),
+          }
+          (root/'preliminary_report.json').write_text(json.dumps(report,indent=2))
+          (root/'colors_complete.json').write_text(json.dumps(colors,indent=2))
+          PY
+
+      - name: Upload research artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixie-dye-composition-research
+          path: research
+          retention-days: 3
+          compression-level: 6
+          if-no-files-found: error
+
+      - name: Report research run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          web_sha=$(jq -r .web_commit research/source_shas.json)
+          server_sha=$(jq -r .game_server_commit research/source_shas.json)
+          body=$(printf 'DYE_RESEARCH_RUN_ID=%s\nWEB_COMMIT=%s\nSERVER_COMMIT=%s\nARTIFACT=pixie-dye-composition-research' "$GITHUB_RUN_ID" "$web_sha" "$server_sha")
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments" -f body="$body" >/dev/null
