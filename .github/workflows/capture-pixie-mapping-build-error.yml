@@ -1,0 +1,34 @@
+name: Capture Pixie mapping builder failure
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  capture:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'capture pixie mapping build error')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p status
+          gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/88763742159/logs" > job.log
+          {
+            echo '--- MATCHES ---'
+            grep -n -E 'AssertionError|Traceback|KeyError|TypeError|ValueError|IndexError|FileNotFound|No such file|Error:|error:|Build mappings|pixie_dye_companion|pixie_expand_exported' job.log | tail -n 220 || true
+            echo '--- TAIL ---'
+            tail -n 420 job.log
+          } > status/pixie-mapping-build-error.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add status/pixie-mapping-build-error.txt
+          git commit -m 'Capture Pixie mapping builder failure'
+          git push
