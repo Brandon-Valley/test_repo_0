@@ -1,0 +1,43 @@
+name: Patch Pixie exact dye bottle mask
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'patch pixie exact bottle mask')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch prepared bottle-mask support
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/pixie_dye_companion_build.py')
+          text=path.read_text()
+          old='''    method = "generated_vector_fallback"\n    if exact_bottle_root and exact_bottle_root.exists():\n        pngs = [path for path in exact_bottle_root.rglob("*.png") if "DyeBottle" in path.as_posix()]\n        if pngs:\n            candidate = max(pngs, key=lambda path: path.stat().st_size)\n            try:\n                exact_base = Image.open(candidate).convert("RGBA")\n                exact_mask = exact_base.getchannel("A")\n                method = "exact_shared_DyeBottle_symbol_whole_symbol_multiplier"\n                shutil.copy2(candidate, bottle_root.parent / "dye_bottle_base.png")\n            except Exception:\n                exact_base = None\n'''
+          new='''    method = "generated_vector_fallback"\n    if exact_bottle_root and exact_bottle_root.exists():\n        prepared_base = exact_bottle_root / "dye_bottle_base.png"\n        prepared_mask = exact_bottle_root / "dye_bottle_color1_mask.png"\n        if prepared_base.exists() and prepared_mask.exists():\n            try:\n                exact_base = Image.open(prepared_base).convert("RGBA")\n                exact_mask = Image.open(prepared_mask).convert("L")\n                if exact_mask.size != exact_base.size:\n                    exact_mask = exact_mask.resize(exact_base.size, Image.Resampling.BILINEAR)\n                method = "exact_shared_DyeBottle_symbol_named_color1_mask"\n                shutil.copy2(prepared_base, bottle_root.parent / "dye_bottle_base.png")\n                shutil.copy2(prepared_mask, bottle_root.parent / "dye_bottle_color1_mask.png")\n            except Exception:\n                exact_base = None\n                exact_mask = None\n'''
+          if old not in text:
+              raise SystemExit('generate_bottles block not found')
+          path.write_text(text.replace(old,new,1))
+          PY
+          python -m py_compile scripts/pixie_dye_companion_build.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pixie_dye_companion_build.py
+          git commit -m 'Use exact DyeBottle color1 mask for bottle rendering'
+          git push
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="EXACT_BOTTLE_MASK_PATCH=complete" >/dev/null
