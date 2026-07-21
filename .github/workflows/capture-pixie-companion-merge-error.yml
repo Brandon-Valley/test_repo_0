@@ -1,0 +1,35 @@
+name: Capture Pixie companion merge failure
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  capture:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'capture pixie companion merge error')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture log tail
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p status
+          gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/88760654609/logs" > job.log
+          {
+            echo '--- MATCHES ---'
+            grep -n -E 'AssertionError|Traceback|No such file|not found|graphs=|selected=|Error:|error:' job.log | tail -n 150 || true
+            echo '--- TAIL ---'
+            tail -n 300 job.log
+          } > status/pixie-dye-companion-merge-error.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add status/pixie-dye-companion-merge-error.txt
+          git commit -m 'Capture Pixie dye companion merge error'
+          git push
