@@ -1,0 +1,43 @@
+name: Patch Pixie bottle mask preparation v2
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'patch pixie bottle mask preparation v2')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply regex patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          path=Path('.github/workflows/pixie-dye-companion-assemble-only.yml')
+          text=path.read_text()
+          text=text.replace('          from pixie_dye_companion_build import render_target_mask\n','          from PIL import Image\n',1)
+          pattern=re.compile(r'''          mask=render_target_mask\(\n.*?          assert mask is not None and mask\.getbbox\(\) is not None\n''',re.S)
+          replacement='''          with Image.open(root_png) as root_image:\n              root_size=root_image.size\n          with Image.open(child_png) as child_image:\n              child_alpha=child_image.convert('RGBA').getchannel('A')\n          root_bounds=root_node['bounds_twips']; child_bounds=child_node['bounds_twips']\n          assert root_bounds and child_bounds\n          a,b,c,d,tx,ty=target['matrix_from_root']\n          corners=[\n              (a*x+c*y+tx,b*x+d*y+ty)\n              for x in (child_bounds[0],child_bounds[1])\n              for y in (child_bounds[2],child_bounds[3])\n          ]\n          left=round((min(x for x,y in corners)-root_bounds[0])*root_size[0]/(root_bounds[1]-root_bounds[0]))\n          right=round((max(x for x,y in corners)-root_bounds[0])*root_size[0]/(root_bounds[1]-root_bounds[0]))\n          top=round((min(y for x,y in corners)-root_bounds[2])*root_size[1]/(root_bounds[3]-root_bounds[2]))\n          bottom=round((max(y for x,y in corners)-root_bounds[2])*root_size[1]/(root_bounds[3]-root_bounds[2]))\n          assert right>left and bottom>top, (left,top,right,bottom,root_bounds,child_bounds,target['matrix_from_root'])\n          resized=child_alpha.resize((right-left,bottom-top),Image.Resampling.BILINEAR)\n          mask=Image.new('L',root_size,0)\n          mask.paste(resized,(left,top))\n          assert mask.getbbox() is not None, (left,top,right,bottom,root_size)\n'''
+          text,count=pattern.subn(replacement,text,count=1)
+          if count!=1:
+              raise SystemExit(f'expected one mask block, replaced {count}')
+          path.write_text(text)
+          PY
+          grep -n -A28 -B3 'with Image.open(root_png)' .github/workflows/pixie-dye-companion-assemble-only.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/pixie-dye-companion-assemble-only.yml
+          git commit -m 'Prepare DyeBottle mask with direct SWF bounds'
+          git push
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="BOTTLE_MASK_PREPARATION_PATCH_V2=complete" >/dev/null
