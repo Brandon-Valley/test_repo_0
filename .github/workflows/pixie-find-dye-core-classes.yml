@@ -1,0 +1,45 @@
+name: Pixie find dye core classes
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  find:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'find pixie dye core classes')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: web
+          fetch-depth: 1
+          lfs: true
+      - name: Scan SWF strings for core class names
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          patterns='isSlotDyeable|hasColor|ColorManager|DyeButton|updateStorageItemColors|updateWardrobeItemColors|TYPE_DYEBOTTLE_ID'
+          : > result/matches.txt
+          find web -type f -iname '*.swf' -print0 | while IFS= read -r -d '' f; do
+            if strings "$f" | grep -Eqi "$patterns"; then
+              echo "$f" | tee -a result/matches.txt
+              strings "$f" | grep -Ei "$patterns" | sort -u | sed 's/^/  /' >> result/matches.txt || true
+            fi
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-dye-core-class-locations
+          path: result
+          retention-days: 3
+      - name: Report run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="DYE_CORE_CLASS_RUN_ID=${GITHUB_RUN_ID}" >/dev/null
