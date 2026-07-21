@@ -1,0 +1,67 @@
+name: Pixie MMO core decompile
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+
+jobs:
+  extract:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'decompile pixie mmo core')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: web
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq unzip
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Decompile MMO core files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          for swf in web/swf/mmo.swf web/pixiehollow/game3/swf/mmo.swf web/franchise/fairies/pixie-hollow/swf/main.swf; do
+            [ -f "$swf" ] || continue
+            safe=$(echo "${swf#web/}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g;s#\.swf$##')
+            out="result/$safe"
+            mkdir -p "$out"
+            echo "${swf#web/}" > "$out/source_path.txt"
+            timeout 1200s java -jar "$FFDEC_JAR" -onerror ignore -export script,symbolClass "$out/export" "$swf" > "$out/export.log" 2>&1 || true
+          done
+          grep -R -n -E 'isSlotDyeable|class Item|class ItemDescription|class ColorManager|function hasColor|function getColor|function setColor|TYPE_DYEBOTTLE_ID' result > result/core_matches.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-mmo-core-decompile
+          path: result
+          retention-days: 3
+          compression-level: 6
+      - name: Report run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="MMO_CORE_RUN_ID=${GITHUB_RUN_ID}" >/dev/null
