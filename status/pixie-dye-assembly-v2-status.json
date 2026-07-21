@@ -1,21 +1,157 @@
 {
   "run": {
-    "id": 29869330369,
-    "status": "in_progress",
-    "conclusion": null,
-    "created_at": "2026-07-21T21:16:58Z",
-    "updated_at": "2026-07-21T21:16:59Z",
-    "html_url": "https://github.com/Brandon-Valley/test_repo_0/actions/runs/29869330369"
+    "id": 29869298603,
+    "status": "completed",
+    "conclusion": "success",
+    "created_at": "2026-07-21T21:16:29Z",
+    "updated_at": "2026-07-21T21:17:37Z",
+    "html_url": "https://github.com/Brandon-Valley/test_repo_0/actions/runs/29869298603"
   },
   "jobs": [
     {
-      "id": 88765335260,
+      "id": 88765224301,
       "name": "assemble",
       "status": "completed",
-      "conclusion": "skipped",
-      "started_at": "2026-07-21T21:16:59Z",
-      "completed_at": "2026-07-21T21:16:59Z",
-      "steps": []
+      "conclusion": "success",
+      "started_at": "2026-07-21T21:16:32Z",
+      "completed_at": "2026-07-21T21:17:36Z",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout latest build scripts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout pinned web source",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout pinned game server",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download successful graph artifacts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download successful manifest",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download existing complete houses/gardens library",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download broad source research",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download targeted dye research",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download dye panel evidence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download MMO core evidence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download framework core evidence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download exact shared DyeBottle source",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install assembly packages",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Merge graphs and discover unpacked library root",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Prepare exact DyeBottle base and named color1 mask",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build mappings, dye assets, documentation, and browser",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Validate complete companion",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Create and test final companion ZIP",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Upload complete companion",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Report completed build",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Checkout pinned game server",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Checkout pinned web source",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Checkout latest build scripts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
     }
   ]
 }
