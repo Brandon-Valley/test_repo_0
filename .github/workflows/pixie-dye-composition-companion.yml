@@ -1,0 +1,524 @@
+name: Build Pixie dye and composition companion
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+  ORIGINAL_LIBRARY_RUN_ID: '29708300624'
+  ORIGINAL_LIBRARY_ARTIFACT: Pixie_Hollow_Houses_and_Gardens_COMPLETE_5cd7f024
+  ORIGINAL_LIBRARY_COMMIT: 5cd7f024ba7918f16975163e59a8320deb20dee3
+
+jobs:
+  preflight:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'build pixie dye composition companion')
+    runs-on: ubuntu-latest
+    outputs:
+      web_sha: ${{ steps.source.outputs.web_sha }}
+      server_sha: ${{ steps.source.outputs.server_sha }}
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout newest web source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: web
+          fetch-depth: 1
+          lfs: true
+
+      - name: Checkout newest game server
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/game-server
+          ref: main
+          path: server
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Pin current sources and build manifest
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          web_sha=$(git -C web rev-parse HEAD)
+          server_sha=$(git -C server rev-parse HEAD)
+          echo "web_sha=$web_sha" >> "$GITHUB_OUTPUT"
+          echo "server_sha=$server_sha" >> "$GITHUB_OUTPUT"
+          if [ "$web_sha" != "$ORIGINAL_LIBRARY_COMMIT" ]; then
+            echo "The web repository advanced to $web_sha, but the existing houses/gardens image library is pinned to $ORIGINAL_LIBRARY_COMMIT. A fresh base-library extraction is required before this companion can be correct." >&2
+            exit 1
+          fi
+          mkdir -p manifest
+          python builder/scripts/pixie_houses_gardens_manifest.py --source web --output manifest
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p=Path('manifest/selection_summary.json')
+          data=json.loads(p.read_text())
+          data['source_commit']=os.environ['ORIGINAL_LIBRARY_COMMIT']
+          p.write_text(json.dumps(data,indent=2))
+          PY
+          git -C web log -1 --format=fuller > manifest/web_commit_details.txt
+          git -C server log -1 --format=fuller > manifest/server_commit_details.txt
+          printf '%s\n' "$web_sha" > manifest/web_commit.txt
+          printf '%s\n' "$server_sha" > manifest/server_commit.txt
+          python -m py_compile builder/scripts/pixie_swf_display_graph.py builder/scripts/pixie_dye_companion_build.py builder/scripts/pixie_expand_exported_symbols.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-dye-companion-manifest
+          path: manifest
+          retention-days: 3
+          compression-level: 6
+
+  graphs:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'build pixie dye composition companion')
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout current build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned web source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: ${{ needs.preflight.outputs.web_sha }}
+          path: web
+          fetch-depth: 1
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-dye-companion-manifest
+          path: manifest
+
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq unzip
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          test -n "$url"
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+
+      - name: Select graph shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv, os
+          from pathlib import Path
+          shard=int(os.environ['SHARD'])
+          rows=list(csv.DictReader(Path('manifest/selected_swfs.tsv').open(),delimiter='\t'))
+          selected=[row for i,row in enumerate(rows) if i % 4 == shard]
+          with Path('shard.tsv').open('w',newline='') as f:
+              w=csv.DictWriter(f,rows[0].keys(),delimiter='\t')
+              w.writeheader(); w.writerows(selected)
+          print('shard',shard,'selected',len(selected),'of',len(rows))
+          PY
+
+      - name: Build complete SWF display-list graphs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p graph_output/graphs graph_output/logs graph_output/failures
+          tail -n +2 shard.tsv | while IFS=$'\t' read -r digest rel bytes category all_categories sprite_mode duplicates; do
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            tmp="graph_output/.tmp/${safe}"
+            output="graph_output/graphs/${safe}.json"
+            mkdir -p "$tmp/export" "$(dirname "$output")" "$(dirname "graph_output/logs/${safe}.log")"
+            input="web/$rel"
+            echo "GRAPH $rel"
+            if ! timeout 900s java -jar "$FFDEC_JAR" -onerror ignore -dumpSWF "$input" > "$tmp/swf_dump.txt" 2> "$tmp/dump.err"; then
+              echo "$rel dump failed" | tee "graph_output/failures/${digest:0:12}_dump.txt"
+              continue
+            fi
+            timeout 300s java -jar "$FFDEC_JAR" -onerror ignore -export symbolClass "$tmp/export" "$input" > "$tmp/export.log" 2>&1 || true
+            symbols=$(find "$tmp/export" -type f -name symbols.csv | head -n 1 || true)
+            if [ -z "$symbols" ]; then
+              symbols="$tmp/symbols.csv"
+              : > "$symbols"
+            fi
+            if ! python builder/scripts/pixie_swf_display_graph.py \
+              --dump "$tmp/swf_dump.txt" \
+              --symbols "$symbols" \
+              --source-swf "$rel" \
+              --output "$output" > "graph_output/logs/${safe}.log" 2>&1; then
+              cp "graph_output/logs/${safe}.log" "graph_output/failures/${digest:0:12}_parse.txt"
+              continue
+            fi
+            rm -rf "$tmp"
+          done
+          graph_count=$(find graph_output/graphs -type f -name '*.json' | wc -l)
+          failure_count=$(find graph_output/failures -type f | wc -l)
+          echo "graph_count=$graph_count failure_count=$failure_count"
+          test "$failure_count" -eq 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-dye-graphs-${{ matrix.shard }}
+          path: graph_output
+          retention-days: 3
+          compression-level: 6
+          if-no-files-found: error
+
+  assemble:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'build pixie dye composition companion')
+    needs: [preflight, graphs]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout latest build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned web source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: ${{ needs.preflight.outputs.web_sha }}
+          path: web
+          fetch-depth: 1
+          lfs: true
+
+      - name: Checkout pinned game server
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/game-server
+          ref: ${{ needs.preflight.outputs.server_sha }}
+          path: server
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download graph artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pixie-dye-graphs-*
+          path: downloaded_graphs
+
+      - name: Download manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-dye-companion-manifest
+          path: manifest
+
+      - name: Download existing complete houses/gardens library
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ORIGINAL_LIBRARY_ARTIFACT }}
+          path: original_library_artifact
+          repository: Brandon-Valley/test_repo_0
+          run-id: ${{ env.ORIGINAL_LIBRARY_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Download broad source research
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-dye-composition-research
+          path: evidence/broad
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29864509629'
+          github-token: ${{ github.token }}
+
+      - name: Download targeted dye research
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-targeted-dye-research
+          path: evidence/targeted
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29864784989'
+          github-token: ${{ github.token }}
+
+      - name: Download dye panel evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-dye-panel-only
+          path: evidence/dye_panel
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29864923178'
+          github-token: ${{ github.token }}
+
+      - name: Download MMO core evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-mmo-core-decompile
+          path: evidence/mmo_core
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29865338060'
+          github-token: ${{ github.token }}
+
+      - name: Download framework core evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-framework-dye-core
+          path: evidence/framework_core
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29866053362'
+          github-token: ${{ github.token }}
+
+      - name: Download exact shared DyeBottle source
+        uses: actions/download-artifact@v4
+        with:
+          name: pixie-gather-common-dye-bottle
+          path: evidence/gather_common_bottle
+          repository: Brandon-Valley/test_repo_0
+          run-id: '29866336491'
+          github-token: ${{ github.token }}
+
+      - name: Install assembly packages
+        shell: bash
+        run: python -m pip install --quiet pillow
+
+      - name: Merge graphs and unpack original library
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p graphs library
+          find downloaded_graphs -type f -path '*/graphs/*.json' -print0 | while IFS= read -r -d '' f; do
+            rel=${f#*/graphs/}
+            mkdir -p "graphs/$(dirname "$rel")"
+            cp "$f" "graphs/$rel"
+          done
+          graph_count=$(find graphs -type f -name '*.json' | wc -l)
+          selected_count=$(($(wc -l < manifest/selected_swfs.tsv)-1))
+          echo "graphs=$graph_count selected=$selected_count"
+          test "$graph_count" -eq "$selected_count"
+          inner_zip=$(find original_library_artifact -type f -name 'Pixie_Hollow_Houses_and_Gardens_Image_Library_*.zip' | head -n 1)
+          test -n "$inner_zip"
+          unzip -q "$inner_zip" -d library
+          test -f library/00_metadata/image_index.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          source=json.loads(Path('library/00_metadata/source_commit.json').read_text())
+          assert source['commit']==os.environ['ORIGINAL_LIBRARY_COMMIT'], source
+          PY
+
+      - name: Prepare exact named color1 bottle mask
+        shell: bash
+        env:
+          PYTHONPATH: builder/scripts
+        run: |
+          set -euo pipefail
+          mkdir -p prepared_bottle
+          dump=$(find evidence/gather_common_bottle -type f -path '*/swf/meadow/gather_common/swf_dump.txt' | grep -v pixiehollow | head -n 1)
+          symbols=$(find evidence/gather_common_bottle -type f -path '*/swf/meadow/gather_common/export/symbolClass/symbols.csv' | grep -v pixiehollow | head -n 1)
+          test -n "$dump" -a -n "$symbols"
+          python builder/scripts/pixie_swf_display_graph.py --dump "$dump" --symbols "$symbols" --source-swf swf/meadow/gather_common.swf --output prepared_bottle/bottle_graph.json
+          python - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          from PIL import Image
+          from pixie_dye_companion_build import render_target_mask
+
+          evidence=Path('evidence/gather_common_bottle')
+          graph=json.loads(Path('prepared_bottle/bottle_graph.json').read_text())
+          symbol=next(row for row in graph['exported_symbols'] if row.get('class_name')=='DyeBottle')
+          targets=[row for row in symbol.get('dye_targets',[]) if row.get('instance_name')=='color1']
+          assert targets, symbol
+          target=targets[0]
+          root_tag=int(symbol['tag_id']); child_tag=int(target['tag_id'])
+          root_png=next(p for p in evidence.rglob(f'DefineSprite_{root_tag}_DyeBottle/1.png') if 'pixiehollow' not in p.as_posix())
+          child_png=next(p for p in evidence.rglob(f'DefineSprite_{child_tag}*/1.png') if 'pixiehollow' not in p.as_posix())
+          root_node=graph['nodes'][str(root_tag)]
+          child_node=graph['nodes'][str(child_tag)]
+          base_root=Path('/')
+          mask=render_target_mask(
+              base_root,
+              {'canonical_path':root_png.as_posix().lstrip('/')},
+              {'canonical_path':child_png.as_posix().lstrip('/')},
+              root_node['bounds_twips'],
+              child_node['bounds_twips'],
+              target['matrix_from_root'],
+          )
+          assert mask is not None and mask.getbbox() is not None
+          shutil.copy2(root_png,'prepared_bottle/dye_bottle_base.png')
+          mask.save('prepared_bottle/dye_bottle_color1_mask.png',optimize=True)
+          details={
+              'source_swf':'swf/meadow/gather_common.swf',
+              'root_tag_id':root_tag,
+              'root_symbol':'DyeBottle',
+              'color1_child_tag_id':child_tag,
+              'matrix_from_root':target['matrix_from_root'],
+              'root_bounds_twips':root_node['bounds_twips'],
+              'child_bounds_twips':child_node['bounds_twips'],
+              'base_image':root_png.as_posix(),
+              'mask_bbox':mask.getbbox(),
+          }
+          Path('prepared_bottle/dye_bottle_mapping.json').write_text(json.dumps(details,indent=2))
+          PY
+          test -s prepared_bottle/dye_bottle_base.png
+          test -s prepared_bottle/dye_bottle_color1_mask.png
+
+      - name: Build mappings, dye assets, documentation, and browser
+        shell: bash
+        env:
+          PYTHONPATH: builder/scripts
+          WEB_SHA: ${{ needs.preflight.outputs.web_sha }}
+          SERVER_SHA: ${{ needs.preflight.outputs.server_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p patch
+          python builder/scripts/pixie_dye_companion_build.py \
+            --source web \
+            --library library \
+            --graphs graphs \
+            --output patch \
+            --web-commit "$WEB_SHA" \
+            --server-commit "$SERVER_SHA" \
+            --evidence evidence \
+            --exact-bottle-assets prepared_bottle
+          python builder/scripts/pixie_expand_exported_symbols.py \
+            --source web \
+            --library library \
+            --graphs graphs \
+            --output patch
+          mkdir -p patch/10_dye_and_composition/source_evidence/exact_dye_bottle
+          cp -a prepared_bottle/. patch/10_dye_and_composition/source_evidence/exact_dye_bottle/
+
+      - name: Validate complete companion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from PIL import Image
+
+          root=Path('patch')
+          config=root/'10_dye_and_composition/config'
+          summary=json.loads((root/'10_dye_and_composition/BUILD_SUMMARY.json').read_text())
+          dyes=json.loads((config/'dyes.json').read_text())
+          parent=json.loads((config/'image_parent_map.json').read_text())
+          unmatched=json.loads((config/'unmatched_resolution.json').read_text())
+          objects=json.loads((config/'object_component_map.json').read_text())
+          items=json.loads((config/'item_component_map.json').read_text())
+          symbols=json.loads((config/'symbol_component_map.json').read_text())
+          slots=json.loads((config/'item_dye_slots.json').read_text())
+          rows=json.loads((config/'browser_rows.json').read_text())
+          browser=(root/'09_browse_library.html').read_text(encoding='utf-8')
+
+          assert len(dyes)==291, len(dyes)
+          pepper=next(x for x in dyes if x['name']=='Pepper Black')
+          assert pepper['color_id']==55 and pepper['rgb']==[41,42,63] and pepper['hex']=='#292A3F', pepper
+          assert len(parent)==10924, len(parent)
+          assert len(rows)==10924, len(rows)
+          assert len(objects)>=len(items)>0
+          assert len(symbols)>0
+          assert len(unmatched)>0
+          assert summary['bottle_report']['method']=='exact_shared_DyeBottle_symbol_named_color1_mask', summary['bottle_report']
+          assert summary['maximum_dye_channels_in_client']==2
+          assert any(mapping.get('dye_slot_count',0)==2 for mapping in objects.values())
+          assert any(mapping.get('dye_slot_count',0)==1 for mapping in objects.values())
+          assert any(row.get('mapping_role')=='complete_exported_symbol_without_catalog_match' for row in rows)
+          assert 'id="chars"' in browser and 'id="charMode"' in browser
+          assert 'id="dyeSlots"' in browser and 'id="viewer"' in browser
+          assert 'itemComponents[row.mapping_key]' in browser
+          assert 'Size range:' in browser and 'ondragstart' in browser and 'ondrop' in browser
+
+          for dye in dyes:
+              path=root/dye['bottle_image']
+              assert path.exists() and path.stat().st_size>0, path
+          for key,mapping in objects.items():
+              for path in mapping.get('dye_slot_masks',{}).values():
+                  file=root/path
+                  assert file.exists() and file.stat().st_size>0, (key,file)
+          base=Image.open(root/'10_dye_and_composition/assets/dye_bottle_base.png')
+          mask=Image.open(root/'10_dye_and_composition/assets/dye_bottle_color1_mask.png')
+          assert base.size==mask.size and mask.getbbox() is not None
+          print(json.dumps({
+              'summary':summary,
+              'objects':len(objects),
+              'catalog_items':len(items),
+              'additional_symbols':len(symbols),
+              'unmatched_classified':len(unmatched),
+              'browser_bytes':(root/'09_browse_library.html').stat().st_size,
+          },indent=2))
+          PY
+
+      - name: Create and test final companion ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="Pixie_Hollow_Dye_and_Composition_Companion_${{ needs.preflight.outputs.web_sha }}"
+          short=${name:0:50}
+          zip_name="Pixie_Hollow_Dye_and_Composition_Companion_${{ needs.preflight.outputs.web_sha }}.zip"
+          zip_name=${zip_name/5cd7f024ba7918f16975163e59a8320deb20dee3/5cd7f024}
+          (cd patch && zip -q -r -6 "../$zip_name" .)
+          unzip -t "$zip_name" >/dev/null
+          sha256sum "$zip_name" > companion_sha256.txt
+          echo "$zip_name" > companion_zip_name.txt
+          du -h "$zip_name"
+
+      - name: Upload complete companion
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pixie_Hollow_Dye_and_Composition_Companion_5cd7f024
+          path: |
+            Pixie_Hollow_Dye_and_Composition_Companion_5cd7f024.zip
+            companion_sha256.txt
+            patch/09_browse_library.html
+            patch/10_dye_and_composition/DYE_SYSTEM.md
+            patch/10_dye_and_composition/COMPOSITION_AND_DOUBLE_UNDERSCORES.md
+            patch/10_dye_and_composition/UNMATCHED_EXPLAINED.md
+            patch/10_dye_and_composition/BUILD_SUMMARY.json
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Report completed build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=$(jq -c . patch/10_dye_and_composition/BUILD_SUMMARY.json)
+          zip_sha=$(cut -d' ' -f1 companion_sha256.txt)
+          zip_bytes=$(stat -c%s Pixie_Hollow_Dye_and_Composition_Companion_5cd7f024.zip)
+          body=$(printf 'DYE_COMPANION_RUN_ID=%s\nWEB_COMMIT=%s\nSERVER_COMMIT=%s\nARTIFACT=Pixie_Hollow_Dye_and_Composition_Companion_5cd7f024\nZIP_BYTES=%s\nZIP_SHA256=%s\nSUMMARY=%s' "$GITHUB_RUN_ID" '${{ needs.preflight.outputs.web_sha }}' '${{ needs.preflight.outputs.server_sha }}' "$zip_bytes" "$zip_sha" "$summary")
+          gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="$body" >/dev/null
