@@ -1,0 +1,41 @@
+name: Patch Pixie companion builder
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'patch pixie companion builder')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply corrections and compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/pixie_dye_companion_build.py')
+          text=path.read_text()
+          text=text.replace('from PIL import Image, ImageDraw', 'from PIL import Image, ImageDraw, ImageChops')
+          text=text.replace('Image.max(merged, rendered)', 'ImageChops.lighter(merged, rendered)')
+          path.write_text(text)
+          PY
+          python -m py_compile scripts/pixie_dye_companion_build.py scripts/pixie_swf_display_graph.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pixie_dye_companion_build.py
+          git commit -m 'Fix dye mask compositing in companion builder'
+          git push
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="COMPANION_BUILDER_PATCH=complete" >/dev/null
