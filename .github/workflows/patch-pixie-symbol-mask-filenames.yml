@@ -1,0 +1,43 @@
+name: Patch Pixie symbol mask filenames
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'patch pixie symbol mask filenames')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch and compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/pixie_dye_companion_build.py')
+          text=path.read_text()
+          old='filename = f"item_{item_id}__root_{root_tag_id}__slot_{slot}.png"'
+          new='filename = f"object_{slug(item_id)}__root_{root_tag_id}__slot_{slot}.png"'
+          if old not in text:
+              raise SystemExit('mask filename line not found')
+          path.write_text(text.replace(old,new,1))
+          PY
+          python -m py_compile scripts/pixie_dye_companion_build.py scripts/pixie_expand_exported_symbols.py scripts/pixie_swf_display_graph.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pixie_dye_companion_build.py
+          git commit -m 'Support exported-symbol keys in dye mask filenames'
+          git push
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="SYMBOL_MASK_FILENAME_PATCH=complete" >/dev/null
