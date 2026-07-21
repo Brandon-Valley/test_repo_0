@@ -1,0 +1,83 @@
+{
+  "run": {
+    "id": 29864784989,
+    "status": "in_progress",
+    "conclusion": null,
+    "html_url": "https://github.com/Brandon-Valley/test_repo_0/actions/runs/29864784989"
+  },
+  "jobs": [
+    {
+      "id": 88750155626,
+      "name": "targeted",
+      "status": "in_progress",
+      "conclusion": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-java@v4",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install JPEXS",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Collect focused evidence",
+          "status": "in_progress",
+          "conclusion": null
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Report run",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Run actions/setup-java@v4",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "pending",
+          "conclusion": null
+        }
+      ]
+    }
+  ]
+}
