@@ -323,7 +323,15 @@ def main() -> None:
     write_json(config_root / "browser_rows.json", browser_rows)
     write_json(config_root / "additional_mask_report.json", mask_report)
 
-    updated_browser = browser_html(browser_rows, colors, all_mappings)
+    browser_mappings = {
+        key: {
+            "dye_slots": mapping.get("dye_slots", []),
+            "dye_slot_masks": mapping.get("dye_slot_masks", {}),
+            "preview_accuracy": mapping.get("preview_accuracy"),
+        }
+        for key, mapping in all_mappings.items()
+    }
+    updated_browser = browser_html(browser_rows, colors, browser_mappings)
     updated_browser = updated_browser.replace(
         "itemComponents[String(row.item_id)]||null",
         "itemComponents[row.mapping_key]||null",
