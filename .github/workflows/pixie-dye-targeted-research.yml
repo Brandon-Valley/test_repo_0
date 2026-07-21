@@ -1,0 +1,100 @@
+name: Pixie targeted dye research
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+
+jobs:
+  targeted:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'run pixie targeted dye research')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: web
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/game-server
+          ref: main
+          path: server
+          fetch-depth: 1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq ripgrep unzip
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Collect focused evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p targeted/xml targeted/search targeted/decompiled targeted/assets targeted/manifests
+          git -C web rev-parse HEAD > targeted/web_commit.txt
+          git -C server rev-parse HEAD > targeted/server_commit.txt
+          cp web/xml/colorAssets.xml targeted/xml/
+          cp web/xml/items.xml targeted/xml/
+          cp web/xml/homeAssets.xml targeted/xml/
+          cp web/xml/panels/dyePanel.xml targeted/xml/
+          rg -n -i --hidden --glob '!*.swf' --glob '!*.png' --glob '!*.jpg' 'dye|dyeable|color_id|colorid|forceTwoColorModeIds|locked color|original color' web server > targeted/search/references.txt || true
+
+          find web -type f -iname '*.swf' | grep -Ei '/(dye|color|palette|bottle)[^/]*\.swf$|/dyePanel\.swf$' | sort > targeted/manifests/exact_dye_swfs.txt || true
+          find web -type f -iname '*.swf' | grep -Ei '/(avatar|home|item|wardrobe|storage|inventory)[^/]*\.swf$' | sort | head -n 25 > targeted/manifests/core_renderer_swfs.txt || true
+          cat targeted/manifests/exact_dye_swfs.txt targeted/manifests/core_renderer_swfs.txt | awk '!seen[$0]++' > targeted/manifests/selected_swfs.txt
+
+          while IFS= read -r swf; do
+            [ -f "$swf" ] || continue
+            rel=${swf#web/}
+            safe=$(printf '%s' "${rel%.swf}" | sed -E 's#[^A-Za-z0-9._/-]+#_#g')
+            out="targeted/decompiled/${safe}"
+            mkdir -p "$out"
+            echo "$rel" > "$out/source_path.txt"
+            timeout 300s java -jar "$FFDEC_JAR" -onerror ignore -export script,symbolClass "$out/export" "$swf" > "$out/export.log" 2>&1 || true
+            if echo "$rel" | grep -Eqi 'dye|color|bottle|home\.swf|items?\.swf'; then
+              timeout 240s java -jar "$FFDEC_JAR" -onerror ignore -dumpSWF "$swf" > "$out/swf_dump.txt" 2> "$out/swf_dump.err" || true
+              timeout 240s java -jar "$FFDEC_JAR" -onerror ignore -format 'sprite:png' -export sprite "$out/sprites" "$swf" > "$out/sprites.log" 2>&1 || true
+            fi
+            find "$out" -type f -size 0 -delete || true
+          done < targeted/manifests/selected_swfs.txt
+
+          find web -type f \( -iname '*dye*.png' -o -iname '*dye*.jpg' -o -iname '*bottle*.png' -o -iname '*color*.png' \) -print0 | while IFS= read -r -d '' f; do
+            rel=${f#web/}; mkdir -p "targeted/assets/$(dirname "$rel")"; cp "$f" "targeted/assets/$rel";
+          done
+          rg -n -i 'dye|color|slot|locked|original|bottle|transform|ColorTransform' targeted/decompiled > targeted/search/decompiled_dye_references.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-targeted-dye-research
+          path: targeted
+          retention-days: 3
+          compression-level: 6
+      - name: Report run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body=$(printf 'TARGETED_DYE_RUN_ID=%s\nWEB_COMMIT=%s\nSERVER_COMMIT=%s' "$GITHUB_RUN_ID" "$(cat targeted/web_commit.txt)" "$(cat targeted/server_commit.txt)")
+          gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="$body" >/dev/null
