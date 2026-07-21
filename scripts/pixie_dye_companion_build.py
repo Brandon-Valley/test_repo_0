@@ -306,7 +306,7 @@ def generate_masks(
                 report["failed"] += 1
                 mapping.setdefault("mask_failures", {})[str(slot)] = target_details
                 continue
-            filename = f"item_{item_id}__root_{root_tag_id}__slot_{slot}.png"
+            filename = f"object_{slug(item_id)}__root_{root_tag_id}__slot_{slot}.png"
             destination = mask_root / filename
             merged.save(destination, optimize=True)
             relative = f"10_dye_and_composition/assets/dye_slot_masks/{filename}"
