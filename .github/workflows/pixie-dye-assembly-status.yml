@@ -21,7 +21,7 @@ jobs:
           set -euo pipefail
           mkdir -p status
           runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pixie-dye-companion-assemble-only.yml/runs?per_page=20")
-          run=$(jq '[.workflow_runs[] | select(.conclusion != "skipped")][0]' <<<"$runs")
+          run=$(jq '[.workflow_runs[] | select(.head_sha == "05ae8b7c7a855338b944863e50367077cd0fb185")][0]' <<<"$runs")
           id=$(jq -r .id <<<"$run")
           jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100" | jq '[.jobs[] | {id,name,status,conclusion,started_at,completed_at,steps:[.steps[]? | {name,status,conclusion}]}]')
           jq -n --argjson run "$run" --argjson jobs "$jobs" '{run:{id:$run.id,status:$run.status,conclusion:$run.conclusion,created_at:$run.created_at,updated_at:$run.updated_at,html_url:$run.html_url},jobs:$jobs}' > status/pixie-dye-assembly-status.json
