@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageChops
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -294,7 +294,7 @@ def generate_masks(
                 if rendered is None or rendered.getbbox() is None:
                     target_details.append({"tag_id": child_tag_id, "status": "render_failed"})
                     continue
-                merged = rendered if merged is None else Image.max(merged, rendered)
+                merged = rendered if merged is None else ImageChops.lighter(merged, rendered)
                 target_details.append(
                     {
                         "tag_id": child_tag_id,
