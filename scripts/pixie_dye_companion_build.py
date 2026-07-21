@@ -753,7 +753,7 @@ def main() -> None:
             handle.write(json.dumps(graph, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     with (config_root / "dyes.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, ["game_sort_order", "color_id", "name", "hex", "rgb", "primary_tag", "tags", "description", "bottle_image"])
+        writer = csv.DictWriter(handle, ["game_sort_order", "color_id", "name", "hex", "rgb", "primary_tag", "tags", "description", "bottle_image", "dye_bottle_item_id_formula"])
         writer.writeheader()
         for color in colors:
             writer.writerow({**color, "rgb": ",".join(map(str, color["rgb"])), "tags": ",".join(color["tags"])})
