@@ -25,7 +25,7 @@ jobs:
           selected_jobs=''
           while IFS= read -r id; do
             jobs_raw=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100")
-            if jq -e '.jobs[]? | select(.name == "assemble" and (.conclusion != "skipped" or .status != "completed"))' >/dev/null <<<"$jobs_raw"; then
+            if jq -e '.jobs[]? | select(.name == "assemble" and ((.steps | length) > 0) and .conclusion != "skipped")' >/dev/null <<<"$jobs_raw"; then
               selected_run=$(jq --argjson id "$id" '.workflow_runs[] | select(.id == $id)' <<<"$runs")
               selected_jobs=$(jq '[.jobs[] | {id,name,status,conclusion,started_at,completed_at,steps:[.steps[]? | {name,status,conclusion}]}]' <<<"$jobs_raw")
               break
