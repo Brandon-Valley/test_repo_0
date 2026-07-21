@@ -1,0 +1,43 @@
+name: Patch Pixie browser mapping payload
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'patch pixie browser payload')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch compact payload and compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/pixie_expand_exported_symbols.py')
+          text=path.read_text()
+          old='''    updated_browser = browser_html(browser_rows, colors, all_mappings)\n    updated_browser = updated_browser.replace(\n'''
+          new='''    browser_mappings = {\n        key: {\n            "dye_slots": mapping.get("dye_slots", []),\n            "dye_slot_masks": mapping.get("dye_slot_masks", {}),\n            "preview_accuracy": mapping.get("preview_accuracy"),\n        }\n        for key, mapping in all_mappings.items()\n    }\n    updated_browser = browser_html(browser_rows, colors, browser_mappings)\n    updated_browser = updated_browser.replace(\n'''
+          if old not in text:
+              raise SystemExit('browser generation block not found')
+          path.write_text(text.replace(old,new,1))
+          PY
+          python -m py_compile scripts/pixie_expand_exported_symbols.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pixie_expand_exported_symbols.py
+          git commit -m 'Use compact dye mapping payload in offline browser'
+          git push
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="BROWSER_PAYLOAD_PATCH=complete" >/dev/null
