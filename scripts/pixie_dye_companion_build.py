@@ -758,8 +758,8 @@ def main() -> None:
         for color in colors:
             writer.writerow({**color, "rgb": ",".join(map(str, color["rgb"])), "tags": ",".join(color["tags"])})
     with (config_root / "item_dye_slots.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = ["item_id", "name", "catalog", "dyeable_attribute", "slot_number", "instance_name", "editable", "mask", "force_two_color_exception"]
-        writer = csv.DictWriter(handle, fields)
+        fields = ["item_id", "name", "catalog", "dyeable_attribute", "slot_number", "xml_flag_index", "instance_name", "editable", "mask", "force_two_color_exception"]
+        writer = csv.DictWriter(handle, fields, extrasaction="ignore")
         writer.writeheader()
         for item in item_slots.values():
             if not item["slots"]:
