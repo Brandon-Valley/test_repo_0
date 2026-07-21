@@ -1,0 +1,43 @@
+name: Patch Pixie dyes CSV column
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'patch pixie dyes csv formula column')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Add missing field and compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/pixie_dye_companion_build.py')
+          text=path.read_text()
+          old='["game_sort_order", "color_id", "name", "hex", "rgb", "primary_tag", "tags", "description", "bottle_image"]'
+          new='["game_sort_order", "color_id", "name", "hex", "rgb", "primary_tag", "tags", "description", "bottle_image", "dye_bottle_item_id_formula"]'
+          if old not in text:
+              raise SystemExit('dyes CSV field list not found')
+          path.write_text(text.replace(old,new,1))
+          PY
+          python -m py_compile scripts/pixie_dye_companion_build.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pixie_dye_companion_build.py
+          git commit -m 'Include dye bottle item formula in dyes CSV'
+          git push
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="DYES_CSV_FORMULA_PATCH=complete" >/dev/null
