@@ -363,16 +363,20 @@ def generate_bottles(output: Path, colors: list[dict], exact_bottle_root: Path |
     exact_mask = None
     method = "generated_vector_fallback"
     if exact_bottle_root and exact_bottle_root.exists():
-        pngs = [path for path in exact_bottle_root.rglob("*.png") if "DyeBottle" in path.as_posix()]
-        if pngs:
-            candidate = max(pngs, key=lambda path: path.stat().st_size)
+        prepared_base = exact_bottle_root / "dye_bottle_base.png"
+        prepared_mask = exact_bottle_root / "dye_bottle_color1_mask.png"
+        if prepared_base.exists() and prepared_mask.exists():
             try:
-                exact_base = Image.open(candidate).convert("RGBA")
-                exact_mask = exact_base.getchannel("A")
-                method = "exact_shared_DyeBottle_symbol_whole_symbol_multiplier"
-                shutil.copy2(candidate, bottle_root.parent / "dye_bottle_base.png")
+                exact_base = Image.open(prepared_base).convert("RGBA")
+                exact_mask = Image.open(prepared_mask).convert("L")
+                if exact_mask.size != exact_base.size:
+                    exact_mask = exact_mask.resize(exact_base.size, Image.Resampling.BILINEAR)
+                method = "exact_shared_DyeBottle_symbol_named_color1_mask"
+                shutil.copy2(prepared_base, bottle_root.parent / "dye_bottle_base.png")
+                shutil.copy2(prepared_mask, bottle_root.parent / "dye_bottle_color1_mask.png")
             except Exception:
                 exact_base = None
+                exact_mask = None
     for color in colors:
         if exact_base is not None and exact_mask is not None:
             bottle = multiply_tint(exact_base.copy(), exact_mask, color["rgb"])
