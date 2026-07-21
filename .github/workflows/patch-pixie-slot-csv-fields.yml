@@ -1,0 +1,43 @@
+name: Patch Pixie slot CSV fields
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.number == 6 && contains(github.event.comment.body, 'patch pixie slot csv fields')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Add slot index and future-proof CSV writer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/pixie_dye_companion_build.py')
+          text=path.read_text()
+          old='fields = ["item_id", "name", "catalog", "dyeable_attribute", "slot_number", "instance_name", "editable", "mask", "force_two_color_exception"]\n        writer = csv.DictWriter(handle, fields)'
+          new='fields = ["item_id", "name", "catalog", "dyeable_attribute", "slot_number", "xml_flag_index", "instance_name", "editable", "mask", "force_two_color_exception"]\n        writer = csv.DictWriter(handle, fields, extrasaction="ignore")'
+          if old not in text:
+              raise SystemExit('slot CSV field block not found')
+          path.write_text(text.replace(old,new,1))
+          PY
+          python -m py_compile scripts/pixie_dye_companion_build.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pixie_dye_companion_build.py
+          git commit -m 'Include XML slot index in dye slot CSV'
+          git push
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/6/comments" -f body="SLOT_CSV_FIELDS_PATCH=complete" >/dev/null
