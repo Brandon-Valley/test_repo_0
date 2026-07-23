@@ -51,4 +51,5 @@ jobs:
               `JOB_CONCLUSION=${selected.job.conclusion || ''}`,
               `ARTIFACTS=${artifacts.map(a => `${a.id}:${a.name}:${a.expired}`).join(',')}`
             ].join('\n');
+            await github.rest.issues.update({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body});
             await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body});
