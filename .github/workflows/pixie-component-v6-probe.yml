@@ -1,0 +1,91 @@
+name: Pixie component V6 timeline probe
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'run pixie component v6 probe')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout helper repository
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout current Pixie Hollow source
+        uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: main
+          path: source
+          fetch-depth: 1
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          test -n "$jar"
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+
+      - name: Export relevant SWFs and timeline evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe/help probe/source
+          sha=$(git -C source rev-parse HEAD)
+          printf '%s\n' "$sha" > probe/source_commit.txt
+          java -jar "$FFDEC_JAR" -help > probe/help/all_help.txt 2>&1 || true
+          java -jar "$FFDEC_JAR" -help swf2xml > probe/help/swf2xml_help.txt 2>&1 || true
+          java -jar "$FFDEC_JAR" -help export > probe/help/export_help.txt 2>&1 || true
+          for rel in swf/winterStorage002.swf swf/ms15Storage_001.swf swf/ms17Storage_002.swf; do
+            base=$(basename "$rel" .swf)
+            out="probe/$base"
+            mkdir -p "$out/sprites" "$out/fundamental" "$out/xml" "$out/source"
+            cp "source/$rel" "$out/source/"
+            timeout 1200s java -jar "$FFDEC_JAR" -onerror ignore -format "sprite:png" -export sprite "$out/sprites" "source/$rel" > "$out/sprite_export.log" 2>&1 || true
+            timeout 600s java -jar "$FFDEC_JAR" -onerror ignore -format "image:png,shape:png,morphshape:png_start_end,button:png" -export "image,shape,morphshape,button,symbolClass" "$out/fundamental" "source/$rel" > "$out/fundamental_export.log" 2>&1 || true
+            timeout 300s java -jar "$FFDEC_JAR" -swf2xml "source/$rel" "$out/xml/$base.xml" > "$out/swf2xml.log" 2>&1 || true
+            find "$out/sprites" -type f | sort > "$out/sprite_files.txt"
+            find "$out/fundamental" -type f | sort > "$out/fundamental_files.txt"
+          done
+          du -sh probe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-component-v6-probe
+          path: probe
+          compression-level: 6
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Report run ID
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `PIXIE_COMPONENT_V6_PROBE_RUN_ID=${context.runId}`
+            });
