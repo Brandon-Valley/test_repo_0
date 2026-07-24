@@ -1,0 +1,29 @@
+name: Pixie component V7 final gaps status
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  issues: write
+
+jobs:
+  status:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'check pixie component v7 final gaps')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {owner:context.repo.owner,repo:context.repo.repo,workflow_id:'pixie-component-v7-final-gaps.yml',per_page:20});
+            let selected=null;
+            for(const run of runs){
+              const jobs=await github.paginate(github.rest.actions.listJobsForWorkflowRun,{owner:context.repo.owner,repo:context.repo.repo,run_id:run.id,per_page:100});
+              const job=jobs.find(j=>j.name==='probe'&&Array.isArray(j.steps)&&j.steps.length>0&&j.conclusion!=='skipped');
+              if(job){selected={run,job};break;}
+            }
+            if(!selected)throw new Error('No real probe run found');
+            const artifacts=await github.paginate(github.rest.actions.listWorkflowRunArtifacts,{owner:context.repo.owner,repo:context.repo.repo,run_id:selected.run.id,per_page:100});
+            const body=[`PIXIE_COMPONENT_V7_FINAL_GAPS_RUN_ID=${selected.run.id}`,`STATUS=${selected.run.status}`,`CONCLUSION=${selected.run.conclusion||''}`,`JOB_ID=${selected.job.id}`,`ARTIFACTS=${artifacts.map(a=>`${a.id}:${a.name}:${a.expired}`).join(',')}`].join('\n');
+            await github.rest.issues.update({owner:context.repo.owner,repo:context.repo.repo,issue_number:context.issue.number,body});
