@@ -1,0 +1,80 @@
+name: Pixie component V7 final gaps
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx1800m
+
+jobs:
+  probe:
+    if: github.event.issue.number == 5 && contains(github.event.comment.body, 'run pixie component v7 final gaps')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PixieHollowRE/web
+          ref: 5cd7f024ba7918f16975163e59a8320deb20dee3
+          path: source
+          fetch-depth: 1
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install JPEXS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq unzip
+          mkdir -p tools/ffdec
+          release=$(curl -fsSL https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest)
+          url=$(printf '%s' "$release" | jq -r '.assets[] | select(.name | test("ffdec_.*\\.zip$")) | .browser_download_url' | head -n 1)
+          curl -fL "$url" -o tools/ffdec.zip
+          unzip -q tools/ffdec.zip -d tools/ffdec
+          jar=$(find tools/ffdec -type f -name ffdec.jar | head -n 1)
+          echo "FFDEC_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Export and inspect remaining branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          for rel in swf/home.swf swf/ms16Storage_001.swf; do
+            safe=$(basename "${rel%.swf}")
+            mkdir -p "out/$safe"
+            java -jar "$FFDEC_JAR" -onerror ignore -swf2xml "out/$safe/swf.xml" "source/$rel" >"out/$safe/swf2xml.log" 2>&1 || true
+            java -jar "$FFDEC_JAR" -onerror ignore -format "shape:png,sprite:png" -export "shape,sprite,symbolClass" "out/$safe/export" "source/$rel" >"out/$safe/export.log" 2>&1 || true
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import json, re
+          report={}
+          cases=[('home',61,66),('ms16Storage_001',77,81)]
+          for folder,tag,root in cases:
+              base=Path('out')/folder
+              xml=(base/'swf.xml').read_text(errors='ignore') if (base/'swf.xml').exists() else ''
+              hits=[]
+              for line in xml.splitlines():
+                  if re.search(fr'\bcharacterId="{tag}"\b|\bobjectID="{tag}"\b|\bcharacterId="{root}"\b|\bobjectID="{root}"\b',line): hits.append(line.strip())
+              files=[str(p.relative_to(base)) for p in base.rglob('*') if p.is_file() and (re.search(fr'(^|\D){tag}(\D|$)',p.name) or re.search(fr'(^|\D){tag}(\D|$)',str(p.parent.name)))]
+              report[str(tag)]={'folder':folder,'root_tag':root,'xml_hits':hits[:100],'files':files}
+          Path('out/report.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixie-component-v7-final-gaps
+          path: out
+          retention-days: 3
+          compression-level: 6
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:context.issue.number,body:`PIXIE_COMPONENT_V7_FINAL_GAPS_RUN_ID=${context.runId}`});
